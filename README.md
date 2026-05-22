@@ -17,14 +17,20 @@ npm --version
 brew install node
 ```
 
-然后安装依赖并启动桌面开发模式。当前仓库使用 `yarn.lock` 锁定依赖：
+然后安装依赖并启动桌面开发模式。当前仓库使用 `package-lock.json` 锁定依赖：
 
 ```bash
-yarn install
-yarn dev
+npm install
+npm run dev
 ```
 
-如果你更习惯 npm，也可以使用 `npm install` 和 `npm run dev`，但不要同时提交两套 lockfile。
+后续新增 SDK 时也统一用 npm，例如：
+
+```bash
+npm install some-sdk
+```
+
+不要同时提交 `yarn.lock` 和 `package-lock.json` 两套 lockfile。
 
 启动后会同时运行：
 
