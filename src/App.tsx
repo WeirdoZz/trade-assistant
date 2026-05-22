@@ -48,9 +48,6 @@ type DashboardData = {
   };
 };
 
-const fallbackApi = "http://127.0.0.1:8765";
-const apiBaseUrl = window.tradeAssistant?.apiBaseUrl ?? fallbackApi;
-
 const watchlist = [
   { symbol: "NVDA", label: "NVIDIA", change: "+2.84%", state: "强势突破" },
   { symbol: "MSFT", label: "Microsoft", change: "+0.91%", state: "稳步抬升" },
@@ -64,28 +61,75 @@ const optionFlow = [
   { strike: "Call 155", expiry: "07/19", premium: "$5.7M", bias: "追高" }
 ];
 
+function buildBrowserFallback(symbol: string): DashboardData {
+  const normalized = symbol.trim().toUpperCase() || "NVDA";
+  const start = new Date();
+  start.setDate(start.getDate() - 120);
+  const prices = Array.from({ length: 121 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return {
+      date: date.toISOString().slice(0, 10),
+      close: Number((180 + index * 0.16 + Math.sin(index / 7) * 7).toFixed(2)),
+      volume: 42_000_000 + index * 180_000
+    };
+  });
+  const lastClose = prices[prices.length - 1].close;
+
+  return {
+    symbol: normalized,
+    quote: {
+      name: `${normalized} Inc.`,
+      price: lastClose,
+      changePercent: 1.26,
+      market: "US",
+      updatedAt: new Date().toISOString().slice(0, 10)
+    },
+    prices,
+    signals: [
+      { label: "趋势强度", value: "偏强", score: 78 },
+      { label: "消息情绪", value: "谨慎乐观", score: 64 },
+      { label: "期权异动", value: "Call 放量", score: 71 },
+      { label: "波动风险", value: "中高", score: 58 }
+    ],
+    news: [
+      { title: `${normalized} 近月营收预期被上调`, source: "Market Wire", time: "2 小时前", sentiment: "positive" }
+    ],
+    analysis: {
+      stance: "观察偏多",
+      buyZone: `${(lastClose * 0.96).toFixed(2)} - ${(lastClose * 0.985).toFixed(2)}`,
+      sellZone: `${(lastClose * 1.08).toFixed(2)} - ${(lastClose * 1.14).toFixed(2)}`,
+      risk: `若跌破 ${(lastClose * 0.93).toFixed(2)}，短线趋势可能转弱。`,
+      summary: "浏览器预览占位数据。Electron 桌面模式会通过 IPC 从主进程获取数据。"
+    }
+  };
+}
+
 function App() {
   const [symbol, setSymbol] = useState("NVDA");
   const [query, setQuery] = useState("NVDA");
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [apiState, setApiState] = useState<"连接中" | "已连接" | "离线">("连接中");
+  const [clientState, setClientState] = useState<"加载中" | "本地就绪" | "不可用">("加载中");
+  const [longbridgeStatus, setLongbridgeStatus] = useState<LongbridgeStatus | null>(null);
+  const [oauthBusy, setOauthBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
 
-    fetch(`${apiBaseUrl}/api/dashboard?symbol=${encodeURIComponent(symbol)}`)
-      .then((response) => response.json())
+    const dashboardPromise = window.tradeAssistant?.getDashboard(symbol) ?? Promise.resolve(buildBrowserFallback(symbol));
+
+    dashboardPromise
       .then((payload: DashboardData) => {
         if (!cancelled) {
           setData(payload);
-          setApiState("已连接");
+          setClientState("本地就绪");
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setApiState("离线");
+          setClientState("不可用");
         }
       })
       .finally(() => {
@@ -98,6 +142,33 @@ function App() {
       cancelled = true;
     };
   }, [symbol]);
+
+  useEffect(() => {
+    if (!window.tradeAssistant) {
+      setLongbridgeStatus({ configured: false, connected: false, tokenPath: null });
+      return;
+    }
+
+    window.tradeAssistant.getLongbridgeStatus()
+      .then(setLongbridgeStatus)
+      .catch(() => setLongbridgeStatus(null));
+  }, []);
+
+  const connectLongbridge = async () => {
+    if (!window.tradeAssistant) {
+      return;
+    }
+
+    setOauthBusy(true);
+    try {
+      const status = await window.tradeAssistant?.startLongbridgeOAuth();
+      if (status) {
+        setLongbridgeStatus(status);
+      }
+    } finally {
+      setOauthBusy(false);
+    }
+  };
 
   const chartOption = useMemo(() => {
     const prices = data?.prices ?? [];
@@ -182,10 +253,14 @@ function App() {
             长桥 OpenAPI
           </div>
           <p>行情、新闻、期权链与逐笔异动接口预留中。</p>
-          <div className={`status-pill ${apiState === "已连接" ? "online" : ""}`}>
+          <div className={`status-pill ${clientState === "本地就绪" ? "online" : ""}`}>
             <span />
-            Python API {apiState}
+            Electron IPC {clientState}
           </div>
+          <button className="connect-button" onClick={connectLongbridge} disabled={oauthBusy}>
+            {longbridgeStatus?.connected ? "长桥已授权" : oauthBusy ? "等待授权" : "连接长桥"}
+          </button>
+          <small>{longbridgeStatus?.configured ? "已读取 client id" : "请先配置 .env"}</small>
         </section>
       </aside>
 
@@ -212,7 +287,7 @@ function App() {
           <div>
             <span className="eyebrow">Longbridge-ready Research Console</span>
             <h1>{data?.symbol ?? symbol} 智能交易研究台</h1>
-            <p>聚合近月趋势、新闻情绪、期权流、技术信号与大模型分析，先从占位数据开始，下一步接入真实长桥数据。</p>
+            <p>桌面端本地聚合近月趋势、新闻情绪、期权流、技术信号与大模型分析，下一步会由 Electron 主进程直连长桥 API。</p>
           </div>
           <div className="hero-metrics">
             <Metric icon={<CircleDollarSign size={18} />} label="最新价" value={loading ? "--" : `$${data?.quote.price}`} />

@@ -1,27 +1,12 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { getDashboard } = require("./services/marketData.cjs");
+const {
+  getLongbridgeStatus,
+  startLongbridgeOAuth
+} = require("./services/longbridgeClient.cjs");
 
 const isDev = !app.isPackaged;
-
-let apiProcess;
-
-function startApiServer() {
-  if (isDev) {
-    return;
-  }
-
-  const pythonPath = process.env.TRADE_ASSISTANT_PYTHON ?? "python3";
-  const apiModule = path.join(process.resourcesPath, "backend", "app", "main.py");
-
-  apiProcess = spawn(pythonPath, [apiModule], {
-    stdio: "ignore",
-    env: {
-      ...process.env,
-      TRADE_ASSISTANT_PORT: "8765"
-    }
-  });
-}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -52,8 +37,14 @@ function createWindow() {
   }
 }
 
+function registerIpcHandlers() {
+  ipcMain.handle("dashboard:get", (_event, symbol) => getDashboard(symbol));
+  ipcMain.handle("longbridge:status", () => getLongbridgeStatus());
+  ipcMain.handle("longbridge:oauth:start", () => startLongbridgeOAuth(shell.openExternal));
+}
+
 app.whenReady().then(() => {
-  startApiServer();
+  registerIpcHandlers();
   createWindow();
 
   app.on("activate", () => {
@@ -66,11 +57,5 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
-  }
-});
-
-app.on("before-quit", () => {
-  if (apiProcess) {
-    apiProcess.kill();
   }
 });
