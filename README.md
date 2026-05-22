@@ -52,7 +52,10 @@ cp .env.example .env
 ```bash
 LONGBRIDGE_CLIENT_ID=你的_client_id
 LONGBRIDGE_REGION=cn
+LONGBRIDGE_CALLBACK_PORT=60355
 ```
+
+`LONGBRIDGE_CALLBACK_PORT` 需要和长桥 OAuth 应用里配置的 redirect URI 端口一致。SDK 默认端口是 `60355`。
 
 首次授权可以直接在 App 左侧点击“连接长桥”。它会调用长桥 JavaScript SDK：
 

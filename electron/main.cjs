@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const { getDashboard } = require("./services/marketData.cjs");
+const { getPositions } = require("./services/positions.cjs");
 const {
   getLongbridgeStatus,
   startLongbridgeOAuth
@@ -39,8 +40,11 @@ function createWindow() {
 
 function registerIpcHandlers() {
   ipcMain.handle("dashboard:get", (_event, symbol) => getDashboard(symbol));
+  ipcMain.handle("positions:get", (_event, broker) => getPositions(broker));
   ipcMain.handle("longbridge:status", () => getLongbridgeStatus());
-  ipcMain.handle("longbridge:oauth:start", () => startLongbridgeOAuth(shell.openExternal));
+  ipcMain.handle("longbridge:oauth:start", (_event, options) => (
+    startLongbridgeOAuth((url) => shell.openExternal(url), options)
+  ));
 }
 
 app.whenReady().then(() => {

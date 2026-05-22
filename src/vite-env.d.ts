@@ -4,10 +4,13 @@ interface Window {
   tradeAssistant?: {
     platform: string;
     getDashboard: (symbol: string) => Promise<DashboardData>;
+    getPositions: (broker: BrokerId) => Promise<PositionsResponse>;
     getLongbridgeStatus: () => Promise<LongbridgeStatus>;
-    startLongbridgeOAuth: () => Promise<LongbridgeStatus>;
+    startLongbridgeOAuth: (options?: { force?: boolean }) => Promise<LongbridgeStatus>;
   };
 }
+
+type BrokerId = "longbridge";
 
 type DashboardData = {
   symbol: string;
@@ -36,6 +39,30 @@ type DashboardData = {
 
 type LongbridgeStatus = {
   configured: boolean;
-  connected: boolean;
+  authorized: boolean;
+  authorizing: boolean;
+  tokenExists: boolean;
+  callbackPort: number;
   tokenPath: string | null;
+};
+
+type PositionItem = {
+  broker: BrokerId;
+  accountChannel: string;
+  isPaper: boolean;
+  symbol: string;
+  name: string;
+  market: string;
+  currency: string;
+  quantity: string;
+  availableQuantity: string;
+  costPrice: string;
+  initQuantity: string;
+};
+
+type PositionsResponse = {
+  broker: BrokerId;
+  mode: "live" | "error";
+  positions: PositionItem[];
+  message: string | null;
 };

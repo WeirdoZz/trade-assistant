@@ -12,6 +12,7 @@ import {
   Gauge,
   LineChart,
   Newspaper,
+  RefreshCw,
   Search,
   Settings2,
   ShieldAlert,
@@ -47,6 +48,8 @@ type DashboardData = {
     summary: string;
   };
 };
+
+type ViewId = "research" | "positions";
 
 const watchlist = [
   { symbol: "NVDA", label: "NVIDIA", change: "+2.84%", state: "强势突破" },
@@ -106,13 +109,19 @@ function buildBrowserFallback(symbol: string): DashboardData {
 }
 
 function App() {
+  const [activeView, setActiveView] = useState<ViewId>("research");
+  const [broker, setBroker] = useState<BrokerId>("longbridge");
   const [symbol, setSymbol] = useState("NVDA");
   const [query, setQuery] = useState("NVDA");
   const [data, setData] = useState<DashboardData | null>(null);
+  const [positionsData, setPositionsData] = useState<PositionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [positionsLoading, setPositionsLoading] = useState(false);
+  const [positionsError, setPositionsError] = useState<string | null>(null);
   const [clientState, setClientState] = useState<"加载中" | "本地就绪" | "不可用">("加载中");
   const [longbridgeStatus, setLongbridgeStatus] = useState<LongbridgeStatus | null>(null);
   const [oauthBusy, setOauthBusy] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,7 +154,14 @@ function App() {
 
   useEffect(() => {
     if (!window.tradeAssistant) {
-      setLongbridgeStatus({ configured: false, connected: false, tokenPath: null });
+      setLongbridgeStatus({
+        configured: false,
+        authorized: false,
+        authorizing: false,
+        tokenExists: false,
+        callbackPort: 60355,
+        tokenPath: null
+      });
       return;
     }
 
@@ -160,15 +176,47 @@ function App() {
     }
 
     setOauthBusy(true);
+    setOauthError(null);
     try {
-      const status = await window.tradeAssistant?.startLongbridgeOAuth();
+      const status = await window.tradeAssistant?.startLongbridgeOAuth({ force: true });
       if (status) {
         setLongbridgeStatus(status);
       }
+    } catch (error) {
+      setOauthError(error instanceof Error ? error.message : "长桥授权启动失败");
     } finally {
       setOauthBusy(false);
     }
   };
+
+  const loadPositions = async () => {
+    setPositionsLoading(true);
+    setPositionsError(null);
+
+    try {
+      const payload = await window.tradeAssistant?.getPositions(broker);
+      if (payload) {
+        setPositionsData(payload);
+      } else {
+        setPositionsData({
+          broker,
+          mode: "error",
+          positions: [],
+          message: "当前浏览器预览无法访问 Electron 持仓接口。"
+        });
+      }
+    } catch (error) {
+      setPositionsError(error instanceof Error ? error.message : "持仓加载失败");
+    } finally {
+      setPositionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeView === "positions") {
+      void loadPositions();
+    }
+  }, [activeView, broker]);
 
   const chartOption = useMemo(() => {
     const prices = data?.prices ?? [];
@@ -240,9 +288,14 @@ function App() {
         </div>
 
         <nav className="nav-list" aria-label="主导航">
-          <button className="nav-item active"><LineChart size={18} /> 市场研究</button>
+          <button className={`nav-item ${activeView === "research" ? "active" : ""}`} onClick={() => setActiveView("research")}>
+            <LineChart size={18} /> 市场研究
+          </button>
+          <button className={`nav-item ${activeView === "positions" ? "active" : ""}`} onClick={() => setActiveView("positions")}>
+            <WalletCards size={18} /> 我的持仓
+          </button>
           <button className="nav-item"><Newspaper size={18} /> 新闻情绪</button>
-          <button className="nav-item"><WalletCards size={18} /> 期权异动</button>
+          <button className="nav-item"><Activity size={18} /> 期权异动</button>
           <button className="nav-item"><BrainCircuit size={18} /> AI 策略</button>
           <button className="nav-item"><Database size={18} /> 数据源</button>
         </nav>
@@ -258,32 +311,41 @@ function App() {
             Electron IPC {clientState}
           </div>
           <button className="connect-button" onClick={connectLongbridge} disabled={oauthBusy}>
-            {longbridgeStatus?.connected ? "长桥已授权" : oauthBusy ? "等待授权" : "连接长桥"}
+            {oauthBusy ? "等待授权" : longbridgeStatus?.tokenExists ? "重新授权长桥" : "连接长桥"}
           </button>
-          <small>{longbridgeStatus?.configured ? "已读取 client id" : "请先配置 .env"}</small>
+          {oauthError ? <small className="source-error">{oauthError}</small> : null}
+          <small>
+            {longbridgeStatus?.tokenExists
+              ? "已发现本地 Token"
+              : longbridgeStatus?.configured
+                ? "已读取 client id"
+                : "请先配置 .env"}
+          </small>
         </section>
       </aside>
 
       <section className="workspace">
-        <header className="topbar">
-          <form className="searchbar" onSubmit={submitSymbol}>
-            <Search size={18} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="输入美股代码，例如 AAPL / NVDA"
-              aria-label="股票代码"
-            />
-            <button type="submit">分析</button>
-          </form>
+        {activeView === "research" ? (
+          <>
+            <header className="topbar">
+              <form className="searchbar" onSubmit={submitSymbol}>
+                <Search size={18} />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="输入美股代码，例如 AAPL / NVDA"
+                  aria-label="股票代码"
+                />
+                <button type="submit">分析</button>
+              </form>
 
-          <div className="top-actions">
-            <button className="icon-button" aria-label="通知"><Bell size={18} /></button>
-            <button className="icon-button" aria-label="设置"><Settings2 size={18} /></button>
-          </div>
-        </header>
+              <div className="top-actions">
+                <button className="icon-button" aria-label="通知"><Bell size={18} /></button>
+                <button className="icon-button" aria-label="设置"><Settings2 size={18} /></button>
+              </div>
+            </header>
 
-        <section className="hero-band">
+            <section className="hero-band">
           <div>
             <span className="eyebrow">Longbridge-ready Research Console</span>
             <h1>{data?.symbol ?? symbol} 智能交易研究台</h1>
@@ -294,9 +356,9 @@ function App() {
             <Metric icon={<TrendingUp size={18} />} label="日内变化" value={loading ? "--" : `${data?.quote.changePercent}%`} />
             <Metric icon={<Gauge size={18} />} label="策略倾向" value={data?.analysis.stance ?? "--"} />
           </div>
-        </section>
+            </section>
 
-        <section className="content-grid">
+            <section className="content-grid">
           <div className="chart-panel">
             <div className="section-heading">
               <div>
@@ -335,9 +397,9 @@ function App() {
               {data?.analysis.risk ?? "接入真实数据后展示风险位。"}
             </div>
           </aside>
-        </section>
+            </section>
 
-        <section className="lower-grid">
+            <section className="lower-grid">
           <Panel title="信号雷达" subtitle="Signal Radar" icon={<Activity size={18} />}>
             <div className="signal-list">
               {(data?.signals ?? []).map((signal) => (
@@ -399,7 +461,18 @@ function App() {
               ))}
             </div>
           </Panel>
-        </section>
+            </section>
+          </>
+        ) : (
+          <PositionsView
+            broker={broker}
+            data={positionsData}
+            error={positionsError}
+            loading={positionsLoading}
+            onBrokerChange={setBroker}
+            onRefresh={loadPositions}
+          />
+        )}
       </section>
     </main>
   );
@@ -441,3 +514,111 @@ function Panel({
 }
 
 export default App;
+
+function PositionsView({
+  broker,
+  data,
+  error,
+  loading,
+  onBrokerChange,
+  onRefresh
+}: {
+  broker: BrokerId;
+  data: PositionsResponse | null;
+  error: string | null;
+  loading: boolean;
+  onBrokerChange: (broker: BrokerId) => void;
+  onRefresh: () => void;
+}) {
+  const positions = data?.positions ?? [];
+  const totalShares = positions.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const markets = new Set(positions.map((item) => item.market).filter(Boolean)).size;
+  const currencies = Array.from(new Set(positions.map((item) => item.currency).filter(Boolean))).join(" / ") || "--";
+
+  return (
+    <>
+      <header className="positions-topbar">
+        <div className="broker-select">
+          <span>券商</span>
+          <select value={broker} onChange={(event) => onBrokerChange(event.target.value as BrokerId)}>
+            <option value="longbridge">长桥证券</option>
+          </select>
+        </div>
+
+        <div className="top-actions">
+          <button className="ghost-button" onClick={onRefresh} disabled={loading}>
+            <RefreshCw size={16} /> 刷新持仓
+          </button>
+          <button className="icon-button" aria-label="通知"><Bell size={18} /></button>
+          <button className="icon-button" aria-label="设置"><Settings2 size={18} /></button>
+        </div>
+      </header>
+
+      <section className="positions-hero">
+        <div>
+          <span className="eyebrow">Portfolio</span>
+          <h1>我的持仓</h1>
+          <p>按券商账户聚合股票持仓，后续可扩展盈亏、行情同步和风险暴露分析。</p>
+        </div>
+        <div className="portfolio-metrics">
+          <Metric icon={<WalletCards size={18} />} label="持仓标的" value={`${positions.length}`} />
+          <Metric icon={<CircleDollarSign size={18} />} label="持仓股数" value={`${Number.isFinite(totalShares) ? totalShares.toLocaleString() : "--"}`} />
+          <Metric icon={<Gauge size={18} />} label="市场 / 币种" value={`${markets || "--"} / ${currencies}`} />
+        </div>
+      </section>
+
+      {data?.message ? <div className="inline-note">{data.message}</div> : null}
+      {error ? <div className="inline-note error">{error}</div> : null}
+
+      <section className="positions-panel">
+        <div className="section-heading">
+          <div>
+            <span>Holdings</span>
+            <h2>{broker === "longbridge" ? "长桥股票持仓" : "股票持仓"}</h2>
+          </div>
+          <strong className={data?.mode === "error" ? "error" : undefined}>
+            {data?.mode === "live" ? "Live" : "Error"}
+          </strong>
+        </div>
+
+        <div className="positions-table">
+          <div className="positions-row header">
+            <span>标的</span>
+            <span>市场</span>
+            <span>账户</span>
+            <span>持仓</span>
+            <span>可用</span>
+            <span>成本价</span>
+            <span>币种</span>
+          </div>
+
+          {positions.map((item) => (
+            <div className="positions-row" key={`${item.accountChannel}-${item.symbol}`}>
+              <div className="position-symbol">
+                <strong>{item.symbol}</strong>
+                <span>{item.name || "--"}</span>
+              </div>
+              <span>{item.market || "--"}</span>
+              <span>{item.accountChannel || "--"}</span>
+              <strong>{formatNumber(item.quantity)}</strong>
+              <span>{formatNumber(item.availableQuantity)}</span>
+              <span>{item.costPrice || "--"}</span>
+              <span>{item.currency || "--"}</span>
+            </div>
+          ))}
+
+          {!loading && positions.length === 0 ? (
+            <div className="empty-state">暂无持仓数据</div>
+          ) : null}
+
+          {loading ? <div className="empty-state">正在加载持仓...</div> : null}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function formatNumber(value: string) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toLocaleString() : value || "--";
+}
