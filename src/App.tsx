@@ -33,6 +33,8 @@ type PricePoint = {
 
 type DashboardData = {
   symbol: string;
+  calcInfo?: SecurityCalcInfo | null;
+  staticInfo?: SecurityStaticInfo | null;
   quote: {
     name: string;
     price: number;
@@ -52,6 +54,48 @@ type DashboardData = {
     risk: string;
     summary: string;
   };
+};
+
+type SecurityCalcInfo = {
+  symbol: string | null;
+  lastDone: string | null;
+  changeValue: string | null;
+  changeRate: string | null;
+  volume: number | null;
+  turnover: string | null;
+  ytdChangeRate: string | null;
+  turnoverRate: string | null;
+  totalMarketValue: string | null;
+  capitalFlow: string | null;
+  amplitude: string | null;
+  volumeRatio: string | null;
+  peTtmRatio: string | null;
+  pbRatio: string | null;
+  dividendRatioTtm: string | null;
+  fiveDayChangeRate: string | null;
+  tenDayChangeRate: string | null;
+  halfYearChangeRate: string | null;
+  fiveMinutesChangeRate: string | null;
+};
+
+type SecurityStaticInfo = {
+  symbol: string | null;
+  nameCn: string | null;
+  nameEn: string | null;
+  nameHk: string | null;
+  listingDate?: string | null;
+  exchange: string | null;
+  currency: string | null;
+  lotSize: number | null;
+  totalShares: number | null;
+  circulatingShares: number | null;
+  hkShares?: number | null;
+  eps: string | null;
+  epsTtm: string | null;
+  bps: string | null;
+  dividendYield: string | null;
+  stockDerivatives?: number[];
+  board: string | null;
 };
 
 type ViewId = "research" | "positions";
@@ -176,6 +220,26 @@ function buildBrowserFallback(symbol: string): DashboardData {
 
   return {
     symbol: normalized,
+    calcInfo: null,
+    staticInfo: {
+      symbol: `${normalized}.US`,
+      nameCn: null,
+      nameEn: `${normalized} Inc.`,
+      nameHk: null,
+      listingDate: null,
+      exchange: "US",
+      currency: "USD",
+      lotSize: 1,
+      totalShares: null,
+      circulatingShares: null,
+      hkShares: null,
+      eps: null,
+      epsTtm: null,
+      bps: null,
+      dividendYield: null,
+      stockDerivatives: [],
+      board: "USMain"
+    },
     quote: {
       name: `${normalized} Inc.`,
       price: lastClose,
@@ -225,10 +289,12 @@ function App() {
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
   const [finnhubStatus, setFinnhubStatus] = useState<FinnhubStatus | null>(null);
+  const [keyMetricsExpanded, setKeyMetricsExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setKeyMetricsExpanded(false);
 
     const hasDesktopBridge = Boolean(window.tradeAssistant);
     const dashboardPromise = hasDesktopBridge
@@ -464,6 +530,10 @@ function App() {
       ]
     };
   }, [data]);
+  const staticInfo = data?.staticInfo;
+  const calcInfo = data?.calcInfo;
+  const headlineMetrics = getHeadlineKeyMetrics(staticInfo, calcInfo);
+  const expandedMetrics = getExpandedKeyMetrics(staticInfo, calcInfo);
 
   const submitSymbol = (event: React.FormEvent) => {
     event.preventDefault();
@@ -599,9 +669,37 @@ function App() {
 
                 <section className="hero-band">
           <div>
-            <span className="eyebrow">Finnhub Live Research Console</span>
-            <h1>{data?.symbol ?? symbol} 智能交易研究台</h1>
-            <p>先用 Finnhub REST 补齐历史 K 线与当前快照，再用单连接 WebSocket 接力实时成交价。</p>
+            <div className="key-metrics-heading">
+              <div>
+                <h1>{data?.symbol ?? symbol} 关键指标</h1>
+                <p>估值、盈利、股本与短期交易强度</p>
+              </div>
+              <button
+                className="collapse-button"
+                type="button"
+                onClick={() => setKeyMetricsExpanded((expanded) => !expanded)}
+                aria-expanded={keyMetricsExpanded}
+              >
+                {keyMetricsExpanded ? "收起" : "展开"}
+                <ChevronDown size={16} className={keyMetricsExpanded ? "expanded" : ""} />
+              </button>
+            </div>
+            <div className="key-index-grid">
+              {headlineMetrics.map((metric) => (
+                <div className="key-index-item" key={metric.label}>
+                  <span>{metric.label}</span>
+                  <strong>{loading ? "--" : metric.value}</strong>
+                </div>
+              ))}
+              {keyMetricsExpanded
+                ? expandedMetrics.map((metric) => (
+                  <div className="key-index-item secondary" key={metric.label}>
+                    <span>{metric.label}</span>
+                    <strong>{loading ? "--" : metric.value}</strong>
+                  </div>
+                ))
+                : null}
+            </div>
           </div>
           <div className="hero-metrics">
             <Metric icon={<CircleDollarSign size={18} />} label="最新价" value={loading ? "--" : `$${data?.quote.price.toFixed(2)}`} />
@@ -1140,6 +1238,66 @@ function formatSigned(value: number) {
 
 function formatSignedPercent(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function formatMetricText(value?: string | number | null) {
+  if (value === undefined || value === null || value === "") {
+    return "--";
+  }
+
+  return String(value);
+}
+
+function formatMetricPercent(value?: string | null) {
+  if (!value) {
+    return "--";
+  }
+
+  return value.endsWith("%") ? value : `${value}%`;
+}
+
+function formatMetricCompact(value?: string | number | null) {
+  if (value === undefined || value === null || value === "") {
+    return "--";
+  }
+
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return String(value);
+  }
+
+  return Intl.NumberFormat("zh-CN", {
+    notation: "compact",
+    maximumFractionDigits: 2
+  }).format(number);
+}
+
+function getHeadlineKeyMetrics(staticInfo?: SecurityStaticInfo | null, calcInfo?: SecurityCalcInfo | null) {
+  return [
+    { label: "总市值", value: formatMetricCompact(calcInfo?.totalMarketValue) },
+    { label: "PE TTM", value: formatMetricText(calcInfo?.peTtmRatio) },
+    { label: "PB", value: formatMetricText(calcInfo?.pbRatio) },
+    { label: "EPS TTM", value: formatMetricText(staticInfo?.epsTtm) },
+    { label: "BPS", value: formatMetricText(staticInfo?.bps) },
+    { label: "股息 TTM", value: formatMetricPercent(calcInfo?.dividendRatioTtm ?? staticInfo?.dividendYield) }
+  ];
+}
+
+function getExpandedKeyMetrics(staticInfo?: SecurityStaticInfo | null, calcInfo?: SecurityCalcInfo | null) {
+  return [
+    { label: "流通股本", value: formatMetricCompact(staticInfo?.circulatingShares) },
+    { label: "总股本", value: formatMetricCompact(staticInfo?.totalShares) },
+    { label: "换手率", value: formatMetricPercent(calcInfo?.turnoverRate) },
+    { label: "量比", value: formatMetricText(calcInfo?.volumeRatio) },
+    { label: "振幅", value: formatMetricPercent(calcInfo?.amplitude) },
+    { label: "年初至今", value: formatMetricPercent(calcInfo?.ytdChangeRate) },
+    { label: "5日", value: formatMetricPercent(calcInfo?.fiveDayChangeRate) },
+    { label: "10日", value: formatMetricPercent(calcInfo?.tenDayChangeRate) },
+    { label: "半年", value: formatMetricPercent(calcInfo?.halfYearChangeRate) },
+    { label: "5分钟", value: formatMetricPercent(calcInfo?.fiveMinutesChangeRate) },
+    { label: "成交额", value: formatMetricCompact(calcInfo?.turnover) },
+    { label: "资金流", value: formatMetricCompact(calcInfo?.capitalFlow) }
+  ];
 }
 
 function formatTime(value?: string) {

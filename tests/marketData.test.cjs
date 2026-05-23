@@ -5,7 +5,9 @@ const {
   buildDashboardFromFinnhub,
   buildDashboardFromLongbridgeQuote,
   candlesticksToPrices,
+  fetchLongbridgeCalcIndexes,
   fetchLongbridgeCandlesticks,
+  fetchLongbridgeStaticInfo,
   getFinnhubApiKey,
   getMarketOverview,
   makeMarketCard
@@ -197,6 +199,121 @@ test("longbridge dashboard uses candlesticks for four-month price chart", () => 
   assert.equal(dashboard.prices.length, 2);
   assert.equal(dashboard.prices.at(-1).close, 103);
   assert.equal(dashboard.quote.price, 105);
+});
+
+test("longbridge dashboard exposes static security info", () => {
+  const dashboard = buildDashboardFromLongbridgeQuote("aapl", null, null, {
+    symbol: "AAPL.US",
+    name_cn: "苹果",
+    name_en: "Apple Inc.",
+    exchange: "NASD",
+    currency: "USD",
+    lot_size: 1,
+    total_shares: "1631944100",
+    circulating_shares: "16302661350",
+    eps_ttm: "6.0771",
+    dividend_yield: "0.85",
+    board: "USMain"
+  });
+
+  assert.equal(dashboard.staticInfo.symbol, "AAPL.US");
+  assert.equal(dashboard.staticInfo.nameCn, "苹果");
+  assert.equal(dashboard.staticInfo.totalShares, 1631944100);
+  assert.equal(dashboard.staticInfo.circulatingShares, 16302661350);
+  assert.equal(dashboard.quote.name, "苹果");
+});
+
+test("longbridge static info fetch maps sdk response by plain symbol", async () => {
+  const originalDisableLongbridge = process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+  delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+
+  try {
+    const result = await fetchLongbridgeStaticInfo(["AAPL"], {
+      getStatus: () => ({ configured: true, tokenExists: true }),
+      getContext: async () => ({
+        staticInfo: async (symbols) => {
+          assert.deepEqual(symbols, ["AAPL.US"]);
+          return [{
+            symbol: "AAPL.US",
+            nameEn: "Apple Inc.",
+            exchange: "NASD",
+            currency: "USD",
+            lotSize: 1
+          }];
+        }
+      })
+    });
+
+    assert.equal(result.get("AAPL").nameEn, "Apple Inc.");
+    assert.equal(result.get("AAPL").lotSize, 1);
+  } finally {
+    if (originalDisableLongbridge === undefined) {
+      delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+    } else {
+      process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES = originalDisableLongbridge;
+    }
+  }
+});
+
+test("longbridge calc indexes fetch maps valuation and momentum indexes by plain symbol", async () => {
+  const originalDisableLongbridge = process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+  delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+
+  try {
+    const result = await fetchLongbridgeCalcIndexes(["AAPL"], {
+      getStatus: () => ({ configured: true, tokenExists: true }),
+      getContext: async () => ({
+        calcIndexes: async (symbols, indexes) => {
+          assert.deepEqual(symbols, ["AAPL.US"]);
+          assert.ok(indexes.includes(7));
+          assert.ok(indexes.includes(11));
+          assert.ok(indexes.includes(12));
+          return [{
+            symbol: "AAPL.US",
+            totalMarketValue: "2134501670280.00",
+            peTtmRatio: "21.26",
+            pbRatio: "31.71",
+            dividendRatioTtm: "0.64",
+            turnoverRate: "0.76",
+            ytdChangeRate: "-25.63",
+            volumeRatio: "3.22"
+          }];
+        }
+      })
+    });
+
+    assert.equal(result.get("AAPL").totalMarketValue, "2134501670280.00");
+    assert.equal(result.get("AAPL").peTtmRatio, "21.26");
+    assert.equal(result.get("AAPL").pbRatio, "31.71");
+    assert.equal(result.get("AAPL").turnoverRate, "0.76");
+  } finally {
+    if (originalDisableLongbridge === undefined) {
+      delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+    } else {
+      process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES = originalDisableLongbridge;
+    }
+  }
+});
+
+test("longbridge dashboard exposes calc indexes beside static info", () => {
+  const dashboard = buildDashboardFromLongbridgeQuote("aapl", null, null, {
+    symbol: "AAPL.US",
+    eps_ttm: "6.0771",
+    bps: "4.40197"
+  }, {
+    symbol: "AAPL.US",
+    total_market_value: "2134501670280.00",
+    pe_ttm_ratio: "21.26",
+    pb_ratio: "31.71",
+    dividend_ratio_ttm: "0.64",
+    ytd_change_rate: "-25.63"
+  });
+
+  assert.equal(dashboard.calcInfo.symbol, "AAPL.US");
+  assert.equal(dashboard.calcInfo.totalMarketValue, "2134501670280.00");
+  assert.equal(dashboard.calcInfo.peTtmRatio, "21.26");
+  assert.equal(dashboard.calcInfo.pbRatio, "31.71");
+  assert.equal(dashboard.staticInfo.epsTtm, "6.0771");
 });
 
 test("watchlist card uses longbridge daily candles for sparkline and performance", () => {

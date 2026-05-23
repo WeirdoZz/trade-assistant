@@ -23,6 +23,8 @@ type BrokerId = "longbridge";
 
 type DashboardData = {
   symbol: string;
+  calcInfo?: SecurityCalcInfo | null;
+  staticInfo?: SecurityStaticInfo | null;
   quote: {
     name: string;
     price: number;
@@ -46,6 +48,48 @@ type DashboardData = {
     risk: string;
     summary: string;
   };
+};
+
+type SecurityCalcInfo = {
+  symbol: string | null;
+  lastDone: string | null;
+  changeValue: string | null;
+  changeRate: string | null;
+  volume: number | null;
+  turnover: string | null;
+  ytdChangeRate: string | null;
+  turnoverRate: string | null;
+  totalMarketValue: string | null;
+  capitalFlow: string | null;
+  amplitude: string | null;
+  volumeRatio: string | null;
+  peTtmRatio: string | null;
+  pbRatio: string | null;
+  dividendRatioTtm: string | null;
+  fiveDayChangeRate: string | null;
+  tenDayChangeRate: string | null;
+  halfYearChangeRate: string | null;
+  fiveMinutesChangeRate: string | null;
+};
+
+type SecurityStaticInfo = {
+  symbol: string | null;
+  nameCn: string | null;
+  nameEn: string | null;
+  nameHk: string | null;
+  listingDate?: string | null;
+  exchange: string | null;
+  currency: string | null;
+  lotSize: number | null;
+  totalShares: number | null;
+  circulatingShares: number | null;
+  hkShares?: number | null;
+  eps: string | null;
+  epsTtm: string | null;
+  bps: string | null;
+  dividendYield: string | null;
+  stockDerivatives?: number[];
+  board: string | null;
 };
 
 type FinnhubStatus = {

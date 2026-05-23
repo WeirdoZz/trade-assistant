@@ -1,7 +1,7 @@
 const { loadDotEnv } = require("./env.cjs");
 const path = require("node:path");
 const https = require("node:https");
-const { Period, AdjustType, TradeSessions } = require("longbridge");
+const { Period, AdjustType, TradeSessions, CalcIndex } = require("longbridge");
 const { defaultWatchlist } = require("./watchlist.cjs");
 const { getLongbridgeQuoteContext, getLongbridgeStatus } = require("./longbridgeClient.cjs");
 
@@ -9,6 +9,26 @@ loadDotEnv(path.join(__dirname, "../.."));
 
 const LONGBRIDGE_DAILY_CANDLE_COUNT = 90;
 const longbridgeCandlestickCache = new Map();
+const LONG_BRIDGE_CALC_INDEXES = [
+  CalcIndex.LastDone,
+  CalcIndex.ChangeValue,
+  CalcIndex.ChangeRate,
+  CalcIndex.Volume,
+  CalcIndex.Turnover,
+  CalcIndex.YtdChangeRate,
+  CalcIndex.TurnoverRate,
+  CalcIndex.TotalMarketValue,
+  CalcIndex.CapitalFlow,
+  CalcIndex.Amplitude,
+  CalcIndex.VolumeRatio,
+  CalcIndex.PeTtmRatio,
+  CalcIndex.PbRatio,
+  CalcIndex.DividendRatioTtm,
+  CalcIndex.FiveDayChangeRate,
+  CalcIndex.TenDayChangeRate,
+  CalcIndex.HalfYearChangeRate,
+  CalcIndex.FiveMinutesChangeRate
+];
 
 function makeRandom(seedText) {
   let seed = 0;
@@ -64,6 +84,25 @@ function buildFallbackDashboard(symbol = "NVDA") {
 
   return {
     symbol: normalized,
+    calcInfo: null,
+    staticInfo: {
+      symbol: toLongbridgeSymbol(normalized),
+      nameEn: `${normalized} Inc.`,
+      nameCn: "",
+      nameHk: "",
+      exchange: "US",
+      currency: "USD",
+      lotSize: 1,
+      totalShares: null,
+      circulatingShares: null,
+      hkShares: null,
+      eps: null,
+      epsTtm: null,
+      bps: null,
+      dividendYield: null,
+      stockDerivatives: [],
+      board: "USMain"
+    },
     quote: {
       name: `${normalized} Inc.`,
       price: lastClose,
@@ -331,6 +370,159 @@ function quoteFieldsFromLongbridgeQuote(quote) {
   };
 }
 
+function normalizeLongbridgeStaticInfo(info) {
+  if (!info) {
+    return null;
+  }
+
+  const toText = (value) => (
+    value === undefined || value === null || value === "" ? null : String(value)
+  );
+  const toInteger = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const stockDerivatives = info.stockDerivatives ?? info.stock_derivatives;
+
+  return {
+    symbol: toText(info.symbol),
+    nameCn: toText(info.nameCn ?? info.name_cn),
+    nameEn: toText(info.nameEn ?? info.name_en),
+    nameHk: toText(info.nameHk ?? info.name_hk),
+    listingDate: toText(info.listingDate ?? info.listing_date),
+    exchange: toText(info.exchange),
+    currency: toText(info.currency),
+    lotSize: toInteger(info.lotSize ?? info.lot_size),
+    totalShares: toInteger(info.totalShares ?? info.total_shares),
+    circulatingShares: toInteger(info.circulatingShares ?? info.circulating_shares),
+    hkShares: toInteger(info.hkShares ?? info.hk_shares),
+    eps: toText(info.eps),
+    epsTtm: toText(info.epsTtm ?? info.eps_ttm),
+    bps: toText(info.bps),
+    dividendYield: toText(info.dividendYield ?? info.dividend_yield),
+    stockDerivatives: Array.isArray(stockDerivatives)
+      ? stockDerivatives.map(Number).filter(Number.isFinite)
+      : [],
+    board: toText(info.board)
+  };
+}
+
+function normalizeLongbridgeStaticResponse(response) {
+  const list = Array.isArray(response)
+    ? response
+    : Array.isArray(response?.secuStaticInfo)
+      ? response.secuStaticInfo
+      : Array.isArray(response?.secu_static_info)
+        ? response.secu_static_info
+        : response
+          ? [response]
+          : [];
+
+  return list.map(normalizeLongbridgeStaticInfo).filter(Boolean);
+}
+
+function normalizeLongbridgeCalcInfo(info) {
+  if (!info) {
+    return null;
+  }
+
+  const toText = (value) => (
+    value === undefined || value === null || value === "" ? null : String(value)
+  );
+  const toInteger = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+
+  return {
+    symbol: toText(info.symbol),
+    lastDone: toText(info.lastDone ?? info.last_done),
+    changeValue: toText(info.changeValue ?? info.change_val),
+    changeRate: toText(info.changeRate ?? info.change_rate),
+    volume: toInteger(info.volume),
+    turnover: toText(info.turnover),
+    ytdChangeRate: toText(info.ytdChangeRate ?? info.ytd_change_rate),
+    turnoverRate: toText(info.turnoverRate ?? info.turnover_rate),
+    totalMarketValue: toText(info.totalMarketValue ?? info.total_market_value),
+    capitalFlow: toText(info.capitalFlow ?? info.capital_flow),
+    amplitude: toText(info.amplitude),
+    volumeRatio: toText(info.volumeRatio ?? info.volume_ratio),
+    peTtmRatio: toText(info.peTtmRatio ?? info.pe_ttm_ratio),
+    pbRatio: toText(info.pbRatio ?? info.pb_ratio),
+    dividendRatioTtm: toText(info.dividendRatioTtm ?? info.dividend_ratio_ttm),
+    fiveDayChangeRate: toText(info.fiveDayChangeRate ?? info.five_day_change_rate),
+    tenDayChangeRate: toText(info.tenDayChangeRate ?? info.ten_day_change_rate),
+    halfYearChangeRate: toText(info.halfYearChangeRate ?? info.half_year_change_rate),
+    fiveMinutesChangeRate: toText(info.fiveMinutesChangeRate ?? info.five_minutes_change_rate)
+  };
+}
+
+function normalizeLongbridgeCalcResponse(response) {
+  const list = Array.isArray(response)
+    ? response
+    : Array.isArray(response?.securityCalcIndex)
+      ? response.securityCalcIndex
+      : Array.isArray(response?.security_calc_index)
+        ? response.security_calc_index
+        : response
+          ? [response]
+          : [];
+
+  return list.map(normalizeLongbridgeCalcInfo).filter(Boolean);
+}
+
+async function fetchLongbridgeStaticInfo(symbols, options = {}) {
+  const {
+    getStatus = getLongbridgeStatus,
+    getContext = getLongbridgeQuoteContext
+  } = options;
+  const normalized = [...new Set(symbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean))];
+  if (normalized.length === 0 || process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES === "1") {
+    return new Map();
+  }
+
+  const status = getStatus();
+  if (!status.configured || !status.tokenExists) {
+    return new Map();
+  }
+
+  try {
+    const ctx = await getContext();
+    const response = await ctx.staticInfo(normalized.map(toLongbridgeSymbol));
+    const infos = normalizeLongbridgeStaticResponse(response);
+    return new Map(infos.map((info) => [fromLongbridgeSymbol(info.symbol), info]));
+  } catch (error) {
+    console.warn("[longbridge:static] unavailable", formatLongbridgeErrorDetail(error));
+    return new Map();
+  }
+}
+
+async function fetchLongbridgeCalcIndexes(symbols, options = {}) {
+  const {
+    getStatus = getLongbridgeStatus,
+    getContext = getLongbridgeQuoteContext
+  } = options;
+  const normalized = [...new Set(symbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean))];
+  if (normalized.length === 0 || process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES === "1") {
+    return new Map();
+  }
+
+  const status = getStatus();
+  if (!status.configured || !status.tokenExists) {
+    return new Map();
+  }
+
+  try {
+    const ctx = await getContext();
+    const response = await ctx.calcIndexes(normalized.map(toLongbridgeSymbol), LONG_BRIDGE_CALC_INDEXES);
+    const infos = normalizeLongbridgeCalcResponse(response);
+    return new Map(infos.map((info) => [fromLongbridgeSymbol(info.symbol), info]));
+  } catch (error) {
+    console.warn("[longbridge:calc-index] unavailable", formatLongbridgeErrorDetail(error));
+    return new Map();
+  }
+}
+
 function candlestickTimestampToDate(timestamp) {
   if (timestamp instanceof Date) {
     return timestamp.toISOString().slice(0, 10);
@@ -573,16 +765,20 @@ function formatLongbridgeErrorDetail(error) {
 }
 
 async function getDashboard(symbol = "NVDA") {
-  const [quotes, candlesBySymbol] = await Promise.all([
+  const [quotes, candlesBySymbol, staticInfoBySymbol, calcInfoBySymbol] = await Promise.all([
     fetchLongbridgeQuotes([symbol]),
-    fetchLongbridgeCandlesticks([symbol])
+    fetchLongbridgeCandlesticks([symbol]),
+    fetchLongbridgeStaticInfo([symbol]),
+    fetchLongbridgeCalcIndexes([symbol])
   ]);
   const normalized = String(symbol || "NVDA").trim().toUpperCase();
   const quote = quotes[0];
   const prices = candlesBySymbol.get(normalized) ?? [];
+  const staticInfo = staticInfoBySymbol.get(normalized) ?? null;
+  const calcInfo = calcInfoBySymbol.get(normalized) ?? null;
 
-  if (quote || prices.length > 0) {
-    return buildDashboardFromLongbridgeQuote(symbol, quote, prices);
+  if (quote || prices.length > 0 || staticInfo || calcInfo) {
+    return buildDashboardFromLongbridgeQuote(symbol, quote, prices, staticInfo, calcInfo);
   }
 
   return buildFallbackDashboard(symbol);
@@ -652,10 +848,12 @@ function makeMarketCard({ symbol, name, kind, base }, quote = null, pricesOverri
   };
 }
 
-function buildDashboardFromLongbridgeQuote(symbol, quote, candlestickPrices = null) {
+function buildDashboardFromLongbridgeQuote(symbol, quote, candlestickPrices = null, staticInfo = null, calcInfo = null) {
   const dashboard = buildFallbackDashboard(symbol);
   const fields = quoteFieldsFromLongbridgeQuote(quote) || {};
-  const normalized = String(symbol || fields.symbol || dashboard.symbol).trim().toUpperCase();
+  const normalizedStaticInfo = normalizeLongbridgeStaticInfo(staticInfo);
+  const normalizedCalcInfo = normalizeLongbridgeCalcInfo(calcInfo);
+  const normalized = String(symbol || fields.symbol || fromLongbridgeSymbol(normalizedStaticInfo?.symbol) || dashboard.symbol).trim().toUpperCase();
   const longbridgePrices = Array.isArray(candlestickPrices) && candlestickPrices.length > 0
     ? candlestickPrices
     : null;
@@ -680,8 +878,11 @@ function buildDashboardFromLongbridgeQuote(symbol, quote, candlestickPrices = nu
   return {
     ...dashboard,
     symbol: normalized,
+    staticInfo: normalizedStaticInfo ?? dashboard.staticInfo,
+    calcInfo: normalizedCalcInfo,
     quote: {
       ...dashboard.quote,
+      name: normalizedStaticInfo?.nameCn ?? normalizedStaticInfo?.nameEn ?? dashboard.quote.name,
       price: Number(price.toFixed(2)),
       changeAmount: Number(changeAmount.toFixed(2)),
       changePercent: Number(changePercent.toFixed(2)),
@@ -765,7 +966,9 @@ module.exports = {
   buildDashboardFromFinnhub,
   buildDashboardFromLongbridgeQuote,
   candlesticksToPrices,
+  fetchLongbridgeCalcIndexes,
   fetchLongbridgeCandlesticks,
+  fetchLongbridgeStaticInfo,
   fetchLongbridgeQuotes,
   getDashboard,
   getFinnhubClient,

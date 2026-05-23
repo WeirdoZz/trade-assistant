@@ -506,8 +506,77 @@ button:disabled {
   line-height: 1.7;
 }
 
+.key-metrics-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.key-metrics-heading h1 {
+  margin-top: 0;
+}
+
+.collapse-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid rgba(147, 168, 190, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #dbe5ef;
+  font-size: 12px;
+}
+
+.collapse-button svg {
+  transition: transform 160ms ease;
+}
+
+.collapse-button svg.expanded {
+  transform: rotate(180deg);
+}
+
+.key-index-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(106px, 1fr));
+  gap: 8px;
+  margin-top: 16px;
+  max-width: 610px;
+}
+
+.key-index-item {
+  min-height: 58px;
+  padding: 9px 10px;
+  border: 1px solid rgba(147, 168, 190, 0.15);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.key-index-item.secondary {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.key-index-item span {
+  display: block;
+  color: #91a1b3;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.key-index-item strong {
+  display: block;
+  margin-top: 7px;
+  color: #ffffff;
+  font-size: 15px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
 .hero-metrics {
   display: grid;
+  align-self: start;
   grid-template-columns: repeat(3, 142px);
   gap: 10px;
 }
@@ -533,7 +602,9 @@ button:disabled {
 .metric strong {
   align-self: end;
   color: #ffffff;
-  font-size: 20px;
+  font-size: 18px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .content-grid {
