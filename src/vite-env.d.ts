@@ -41,7 +41,7 @@ type DashboardData = {
     volume: number;
   }>;
   signals: Array<{ label: string; value: string; score: number }>;
-  news: Array<{ title: string; source: string; time: string; sentiment: string }>;
+  news: NewsItem[];
   analysis: {
     stance: string;
     buyZone: string;
@@ -49,6 +49,20 @@ type DashboardData = {
     risk: string;
     summary: string;
   };
+};
+
+type NewsItem = {
+  title: string;
+  source: string;
+  time: string;
+  sentiment: string;
+  summary?: string;
+  url?: string;
+  sentimentLabel?: string | null;
+  sentimentScore?: number | null;
+  tickerSentimentLabel?: string | null;
+  tickerSentimentScore?: number | null;
+  relevanceScore?: number | null;
 };
 
 type SecurityRatings = {

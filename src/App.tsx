@@ -47,7 +47,7 @@ type DashboardData = {
   };
   prices: PricePoint[];
   signals: Array<{ label: string; value: string; score: number }>;
-  news: Array<{ title: string; source: string; time: string; sentiment: string }>;
+  news: NewsItem[];
   analysis: {
     stance: string;
     buyZone: string;
@@ -55,6 +55,20 @@ type DashboardData = {
     risk: string;
     summary: string;
   };
+};
+
+type NewsItem = {
+  title: string;
+  source: string;
+  time: string;
+  sentiment: string;
+  summary?: string;
+  url?: string;
+  sentimentLabel?: string | null;
+  sentimentScore?: number | null;
+  tickerSentimentLabel?: string | null;
+  tickerSentimentScore?: number | null;
+  relevanceScore?: number | null;
 };
 
 type SecurityRatings = {
@@ -350,10 +364,12 @@ function App() {
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
   const [finnhubStatus, setFinnhubStatus] = useState<FinnhubStatus | null>(null);
+  const [expandedNewsKey, setExpandedNewsKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setExpandedNewsKey(null);
 
     const hasDesktopBridge = Boolean(window.tradeAssistant);
     const dashboardPromise = hasDesktopBridge
@@ -844,11 +860,37 @@ function App() {
           <Panel title="新闻与情绪" subtitle="News Feed" icon={<Newspaper size={18} />}>
             <div className="news-list">
               {(data?.news ?? []).map((item) => (
-                <article className="news-item" key={item.title}>
-                  <div className={`sentiment ${item.sentiment}`} />
-                  <div>
-                    <strong>{item.title}</strong>
-                    <span>{item.source} · {item.time}</span>
+                <article className="news-item" key={getNewsKey(item)}>
+                  <div className={`sentiment ${item.sentiment}`} aria-hidden="true" />
+                  <div className="news-content">
+                    <button
+                      className="news-toggle"
+                      type="button"
+                      onClick={() => {
+                        const key = getNewsKey(item);
+                        setExpandedNewsKey((current) => current === key ? null : key);
+                      }}
+                    >
+                      <strong>{item.title}</strong>
+                      <span>{item.source} · {formatTime(item.time)}</span>
+                    </button>
+                    {expandedNewsKey === getNewsKey(item) ? (
+                      <div className="news-detail">
+                        <p>{item.summary || "暂无摘要。"}</p>
+                        <div className="news-tags">
+                          <span>{item.tickerSentimentLabel ?? item.sentimentLabel ?? "Neutral"}</span>
+                          {item.tickerSentimentScore !== undefined && item.tickerSentimentScore !== null ? (
+                            <span>情绪 {item.tickerSentimentScore.toFixed(2)}</span>
+                          ) : null}
+                          {item.relevanceScore !== undefined && item.relevanceScore !== null ? (
+                            <span>相关度 {item.relevanceScore.toFixed(2)}</span>
+                          ) : null}
+                        </div>
+                        {item.url ? (
+                          <a href={item.url} target="_blank" rel="noreferrer">打开新闻源</a>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 </article>
               ))}
@@ -1502,12 +1544,21 @@ function formatTime(value?: string) {
     return "--";
   }
 
-  return new Date(value).toLocaleString("zh-CN", {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("zh-CN", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function getNewsKey(item: NewsItem) {
+  return item.url || `${item.title}:${item.time}`;
 }
 
 function getRealtimeLabel(status: FinnhubStatus | null) {

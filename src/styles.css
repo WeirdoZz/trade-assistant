@@ -1214,6 +1214,12 @@ button:disabled {
   gap: 10px;
 }
 
+.news-list {
+  max-height: 310px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .signal-row {
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr) 32px;
@@ -1247,12 +1253,71 @@ button:disabled {
   align-items: start;
 }
 
-.news-item strong {
+.news-content {
+  min-width: 0;
+}
+
+.news-toggle {
+  display: block;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.news-toggle:hover strong {
+  color: #72d3ff;
+}
+
+.news-item strong,
+.news-toggle strong {
   display: block;
   margin-bottom: 5px;
   color: #eef4f9;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.news-detail {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.news-detail p {
+  margin: 0;
+  color: #dbe5ef;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.news-detail a {
+  color: #72d3ff;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.news-detail a:hover {
+  text-decoration: underline;
+}
+
+.news-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.news-tags span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(114, 211, 255, 0.11);
+  color: #c7eefd;
+  font-size: 11px;
 }
 
 .sentiment {
@@ -1264,6 +1329,10 @@ button:disabled {
 
 .sentiment.positive {
   background: #3ddc97;
+}
+
+.sentiment.negative {
+  background: #ff8b7f;
 }
 
 .option-row {

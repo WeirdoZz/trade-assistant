@@ -5,6 +5,7 @@ const {
   buildDashboardFromFinnhub,
   buildDashboardFromLongbridgeQuote,
   candlesticksToPrices,
+  fetchAlphaVantageNews,
   fetchLongbridgeCalcIndexes,
   fetchLongbridgeCandlesticks,
   fetchLongbridgeRatings,
@@ -123,6 +124,68 @@ test("finnhub dashboard uses quote for latest price and fallback history for cha
   assert.equal(dashboard.quote.previousClose, 123);
   assert.ok(dashboard.prices.length > 1);
   assert.equal(dashboard.prices.at(-1).close, 125.5);
+});
+
+test("alpha vantage news fetch requests 5-day window and returns top 20 by relevance then time", async () => {
+  const originalAlpha = process.env.ALPHA_VANTAGE_API_KEY;
+  process.env.ALPHA_VANTAGE_API_KEY = "alpha-key";
+
+  try {
+    const news = await fetchAlphaVantageNews("AAPL", {
+      now: () => new Date("2026-05-23T12:34:00Z"),
+      request: async (url) => {
+        assert.equal(url.searchParams.get("function"), "NEWS_SENTIMENT");
+        assert.equal(url.searchParams.get("tickers"), "AAPL");
+        assert.equal(url.searchParams.get("time_from"), "20260518T1234");
+        assert.equal(url.searchParams.get("sort"), "RELEVANCE");
+        assert.equal(url.searchParams.get("limit"), "50");
+        assert.equal(url.searchParams.get("apikey"), "alpha-key");
+        return {
+          feed: Array.from({ length: 25 }, (_, index) => ({
+            title: `Apple news ${index}`,
+            url: `https://example.com/aapl-${index}`,
+            time_published: index === 2 ? "20260523T153000" : `20260522T${String(1000 + index).padStart(4, "0")}00`,
+            source: "Example Wire",
+            summary: `Summary ${index}`,
+            overall_sentiment_label: "Somewhat-Bullish",
+            overall_sentiment_score: "0.236",
+            ticker_sentiment: [{
+              ticker: "AAPL",
+              relevance_score: index === 0 ? "0.95" : index === 1 ? "0.91" : index === 2 ? "0.91" : String(0.9 - index / 100),
+              ticker_sentiment_score: "0.42",
+              ticker_sentiment_label: "Bullish"
+            }]
+          }))
+        };
+      }
+    });
+
+    assert.equal(news.length, 20);
+    assert.deepEqual(news.slice(0, 3).map((item) => item.title), [
+      "Apple news 0",
+      "Apple news 2",
+      "Apple news 1"
+    ]);
+    assert.deepEqual(news[0], {
+      title: "Apple news 0",
+      source: "Example Wire",
+      time: "2026-05-22T10:00:00.000Z",
+      sentiment: "positive",
+      summary: "Summary 0",
+      url: "https://example.com/aapl-0",
+      sentimentLabel: "Somewhat-Bullish",
+      sentimentScore: 0.236,
+      tickerSentimentLabel: "Bullish",
+      tickerSentimentScore: 0.42,
+      relevanceScore: 0.95
+    });
+  } finally {
+    if (originalAlpha === undefined) {
+      delete process.env.ALPHA_VANTAGE_API_KEY;
+    } else {
+      process.env.ALPHA_VANTAGE_API_KEY = originalAlpha;
+    }
+  }
 });
 
 test("longbridge dashboard uses quote fields for latest price", () => {
@@ -409,6 +472,54 @@ test("longbridge institution rating accepts summary target as a plain string", a
       delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
     } else {
       process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES = originalDisableLongbridge;
+    }
+  }
+});
+
+test("longbridge ratings are cached for the current local day", async () => {
+  const originalDisableLongbridge = process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+  const originalDisableCache = process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_RATINGS_CACHE;
+  delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+  delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_RATINGS_CACHE;
+
+  let calls = 0;
+  let currentTime = new Date("2026-05-23T10:00:00");
+  const fakeContext = {
+    ratings: async () => {
+      calls += 1;
+      return { multi_letter: "A" };
+    },
+    institutionRating: async () => ({
+      summary: { recommend: "Buy" }
+    })
+  };
+  const options = {
+    getStatus: () => ({ configured: true, tokenExists: true }),
+    getContext: async () => fakeContext,
+    now: () => currentTime
+  };
+
+  try {
+    const first = await fetchLongbridgeRatings(["MSFT"], options);
+    const second = await fetchLongbridgeRatings(["MSFT"], options);
+    currentTime = new Date("2026-05-24T10:00:00");
+    const third = await fetchLongbridgeRatings(["MSFT"], options);
+
+    assert.equal(calls, 2);
+    assert.equal(first.get("MSFT").analyst.multiLetter, "A");
+    assert.equal(second.get("MSFT").institution.summary.recommend, "Buy");
+    assert.equal(third.get("MSFT").analyst.multiLetter, "A");
+  } finally {
+    if (originalDisableLongbridge === undefined) {
+      delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+    } else {
+      process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES = originalDisableLongbridge;
+    }
+
+    if (originalDisableCache === undefined) {
+      delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_RATINGS_CACHE;
+    } else {
+      process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_RATINGS_CACHE = originalDisableCache;
     }
   }
 });

@@ -13,6 +13,7 @@ loadDotEnv(path.join(__dirname, "../.."));
 
 const LONGBRIDGE_DAILY_CANDLE_COUNT = 90;
 const longbridgeCandlestickCache = new Map();
+const longbridgeRatingsCache = new Map();
 const LONG_BRIDGE_CALC_INDEXES = [
   CalcIndex.LastDone,
   CalcIndex.ChangeValue,
@@ -54,6 +55,10 @@ function addDays(date, days) {
 
 function getFinnhubApiKey() {
   return ((process.env.FINNHUB_API_KEY || process.env.FINNHU_API_KEY || "").trim());
+}
+
+function getAlphaVantageApiKey() {
+  return ((process.env.ALPHA_VANTAGE_API_KEY || process.env.ALPHAVANTAGE_API_KEY || "").trim());
 }
 
 function getFinnhubClient(apiKey = getFinnhubApiKey()) {
@@ -208,6 +213,141 @@ function requestFinnhub(pathname, params = {}, { timeout = 20_000 } = {}) {
   });
 
   return requestJson(url, { timeout });
+}
+
+function formatAlphaVantageTimeFrom(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getUTCFullYear(),
+    pad(date.getUTCMonth() + 1),
+    pad(date.getUTCDate()),
+    "T",
+    pad(date.getUTCHours()),
+    pad(date.getUTCMinutes())
+  ].join("");
+}
+
+function parseAlphaVantagePublishedAt(value) {
+  const text = String(value || "");
+  const match = text.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?$/);
+  if (!match) {
+    return text || new Date().toISOString();
+  }
+
+  const [, year, month, day, hour, minute, second = "00"] = match;
+  return new Date(Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second)
+  )).toISOString();
+}
+
+function normalizeSentiment(value) {
+  const text = String(value || "").toLowerCase();
+  if (text.includes("bullish") || text.includes("positive")) {
+    return "positive";
+  }
+  if (text.includes("bearish") || text.includes("negative")) {
+    return "negative";
+  }
+  return "neutral";
+}
+
+function normalizeAlphaVantageNewsItem(item, symbol) {
+  if (!item?.title) {
+    return null;
+  }
+
+  const tickerSentiment = Array.isArray(item.ticker_sentiment)
+    ? item.ticker_sentiment.find((entry) => String(entry?.ticker || "").toUpperCase() === symbol)
+    : null;
+
+  const toNumber = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+
+  return {
+    title: String(item.title),
+    source: String(item.source || item.source_domain || "Alpha Vantage"),
+    time: parseAlphaVantagePublishedAt(item.time_published),
+    sentiment: normalizeSentiment(tickerSentiment?.ticker_sentiment_label ?? item.overall_sentiment_label),
+    summary: item.summary ? String(item.summary) : "",
+    url: item.url ? String(item.url) : "",
+    sentimentLabel: item.overall_sentiment_label ? String(item.overall_sentiment_label) : null,
+    sentimentScore: toNumber(item.overall_sentiment_score),
+    tickerSentimentLabel: tickerSentiment?.ticker_sentiment_label ? String(tickerSentiment.ticker_sentiment_label) : null,
+    tickerSentimentScore: toNumber(tickerSentiment?.ticker_sentiment_score),
+    relevanceScore: toNumber(tickerSentiment?.relevance_score)
+  };
+}
+
+async function fetchAlphaVantageNews(symbol, options = {}) {
+  const {
+    days = 5,
+    requestLimit = 50,
+    returnLimit = 20,
+    now = () => new Date(),
+    request = (url) => requestJson(url, { timeout: 20_000 })
+  } = options;
+  const apiKey = getAlphaVantageApiKey();
+  const normalized = String(symbol || "").trim().toUpperCase();
+  if (!apiKey || !normalized) {
+    console.info("[alphavantage:news] skipped", {
+      reason: !apiKey ? "missing ALPHA_VANTAGE_API_KEY" : "empty symbol",
+      symbol: normalized || symbol
+    });
+    return [];
+  }
+
+  const from = new Date(now());
+  from.setUTCDate(from.getUTCDate() - days);
+
+  const url = new URL("https://www.alphavantage.co/query");
+  url.searchParams.set("function", "NEWS_SENTIMENT");
+  url.searchParams.set("tickers", normalized);
+  url.searchParams.set("time_from", formatAlphaVantageTimeFrom(from));
+  url.searchParams.set("sort", "RELEVANCE");
+  url.searchParams.set("limit", String(requestLimit));
+  url.searchParams.set("apikey", apiKey);
+
+  try {
+    console.info("[alphavantage:news] request", {
+      symbol: normalized,
+      days,
+      requestLimit,
+      returnLimit,
+      sort: "RELEVANCE"
+    });
+    const response = await request(url);
+    const feed = Array.isArray(response?.feed) ? response.feed : [];
+    const news = feed
+      .map((item) => normalizeAlphaVantageNewsItem(item, normalized))
+      .filter(Boolean)
+      .sort((left, right) => {
+        const relevance = (right.relevanceScore ?? -1) - (left.relevanceScore ?? -1);
+        if (relevance !== 0) {
+          return relevance;
+        }
+
+        return new Date(right.time).getTime() - new Date(left.time).getTime();
+      })
+      .slice(0, returnLimit);
+    console.info("[alphavantage:news] response", {
+      symbol: normalized,
+      rawCount: feed.length,
+      count: news.length,
+      information: response?.Information,
+      note: response?.Note
+    });
+    return news;
+  } catch (error) {
+    console.warn("[alphavantage:news] unavailable", formatFinnhubError(error));
+    return [];
+  }
 }
 
 function requestJson(url, { timeout, redirectsLeft = 4, headers = {} }) {
@@ -588,40 +728,78 @@ function normalizeLongbridgeInstitutionRating(response) {
 async function fetchLongbridgeRatings(symbols, options = {}) {
   const {
     getStatus = getLongbridgeStatus,
-    getContext = getLongbridgeFundamentalContext
+    getContext = getLongbridgeFundamentalContext,
+    now = () => new Date()
   } = options;
   const normalized = [...new Set(symbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean))];
   if (normalized.length === 0 || process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES === "1") {
     return new Map();
   }
 
+  const cacheDisabled = process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_RATINGS_CACHE === "1";
+  const cacheDate = getLocalDateKey(now());
+  const result = new Map();
+  const misses = [];
+
+  for (const symbol of normalized) {
+    const cacheKey = `${cacheDate}:${symbol}`;
+    const cached = cacheDisabled ? null : longbridgeRatingsCache.get(cacheKey);
+    if (cached) {
+      console.info("[longbridge:ratings] cache hit", {
+        symbol: toLongbridgeSymbol(symbol),
+        cacheDate
+      });
+      result.set(symbol, cached);
+    } else {
+      console.info("[longbridge:ratings] cache miss", {
+        symbol: toLongbridgeSymbol(symbol),
+        cacheDate,
+        cacheDisabled
+      });
+      misses.push({ symbol, cacheKey });
+    }
+  }
+
+  if (misses.length === 0) {
+    return result;
+  }
+
   const status = getStatus();
   if (!status.configured || !status.tokenExists) {
-    return new Map();
+    return result;
   }
 
   try {
     const ctx = await getContext();
-    const entries = await Promise.all(normalized.map(async (symbol) => {
+    const entries = await Promise.all(misses.map(async ({ symbol, cacheKey }) => {
       const longbridgeSymbol = toLongbridgeSymbol(symbol);
       const [analystResponse, institutionResponse] = await Promise.all([
         ctx.ratings(longbridgeSymbol),
         ctx.institutionRating(longbridgeSymbol)
       ]);
+      const ratings = {
+        analyst: normalizeLongbridgeAnalystRatings(analystResponse),
+        institution: normalizeLongbridgeInstitutionRating(institutionResponse)
+      };
+
+      if (!cacheDisabled) {
+        longbridgeRatingsCache.set(cacheKey, ratings);
+      }
 
       return [
         symbol,
-        {
-          analyst: normalizeLongbridgeAnalystRatings(analystResponse),
-          institution: normalizeLongbridgeInstitutionRating(institutionResponse)
-        }
+        ratings
       ];
     }));
 
-    return new Map(entries);
+    for (const [symbol, ratings] of entries) {
+      result.set(symbol, ratings);
+    }
+
+    return result;
   } catch (error) {
     console.warn("[longbridge:ratings] unavailable", formatLongbridgeErrorDetail(error));
-    return new Map();
+    return result;
   }
 }
 
@@ -919,12 +1097,13 @@ function formatLongbridgeErrorDetail(error) {
 }
 
 async function getDashboard(symbol = "NVDA") {
-  const [quotes, candlesBySymbol, staticInfoBySymbol, calcInfoBySymbol, ratingsBySymbol] = await Promise.all([
+  const [quotes, candlesBySymbol, staticInfoBySymbol, calcInfoBySymbol, ratingsBySymbol, alphaNews] = await Promise.all([
     fetchLongbridgeQuotes([symbol]),
     fetchLongbridgeCandlesticks([symbol]),
     fetchLongbridgeStaticInfo([symbol]),
     fetchLongbridgeCalcIndexes([symbol]),
-    fetchLongbridgeRatings([symbol])
+    fetchLongbridgeRatings([symbol]),
+    fetchAlphaVantageNews(symbol)
   ]);
   const normalized = String(symbol || "NVDA").trim().toUpperCase();
   const quote = quotes[0];
@@ -932,15 +1111,30 @@ async function getDashboard(symbol = "NVDA") {
   const staticInfo = staticInfoBySymbol.get(normalized) ?? null;
   const calcInfo = calcInfoBySymbol.get(normalized) ?? null;
   const ratings = ratingsBySymbol.get(normalized) ?? null;
+  console.info("[dashboard:data] resolved", {
+    symbol: normalized,
+    hasQuote: Boolean(quote),
+    candleCount: prices.length,
+    hasStaticInfo: Boolean(staticInfo),
+    hasCalcInfo: Boolean(calcInfo),
+    hasRatings: Boolean(ratings?.analyst || ratings?.institution),
+    newsCount: alphaNews.length
+  });
 
   if (quote || prices.length > 0 || staticInfo || calcInfo || ratings) {
+    const dashboard = buildDashboardFromLongbridgeQuote(symbol, quote, prices, staticInfo, calcInfo);
     return {
-      ...buildDashboardFromLongbridgeQuote(symbol, quote, prices, staticInfo, calcInfo),
+      ...dashboard,
+      news: alphaNews.length > 0 ? alphaNews : dashboard.news,
       ratings
     };
   }
 
-  return buildFallbackDashboard(symbol);
+  const fallback = buildFallbackDashboard(symbol);
+  return {
+    ...fallback,
+    news: alphaNews.length > 0 ? alphaNews : fallback.news
+  };
 }
 
 function buildSeries(symbol, days = 30, baseOverride) {
@@ -1125,6 +1319,7 @@ module.exports = {
   buildDashboardFromFinnhub,
   buildDashboardFromLongbridgeQuote,
   candlesticksToPrices,
+  fetchAlphaVantageNews,
   fetchLongbridgeCalcIndexes,
   fetchLongbridgeCandlesticks,
   fetchLongbridgeRatings,
@@ -1133,6 +1328,7 @@ module.exports = {
   getDashboard,
   getFinnhubClient,
   getFinnhubApiKey,
+  getAlphaVantageApiKey,
   getMarketOverview,
   makeMarketCard,
   fetchUsSymbols
