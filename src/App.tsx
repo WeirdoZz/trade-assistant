@@ -534,6 +534,7 @@ function App() {
   const calcInfo = data?.calcInfo;
   const headlineMetrics = getHeadlineKeyMetrics(staticInfo, calcInfo);
   const expandedMetrics = getExpandedKeyMetrics(staticInfo, calcInfo);
+  const performanceMetrics = getPerformanceKeyMetrics(data, calcInfo);
 
   const submitSymbol = (event: React.FormEvent) => {
     event.preventDefault();
@@ -701,10 +702,22 @@ function App() {
                 : null}
             </div>
           </div>
-          <div className="hero-metrics">
-            <Metric icon={<CircleDollarSign size={18} />} label="最新价" value={loading ? "--" : `$${data?.quote.price.toFixed(2)}`} />
-            <Metric icon={<TrendingUp size={18} />} label="日内变化" value={loading ? "--" : `${formatSigned(data?.quote.changeAmount ?? 0)} / ${formatSignedPercent(data?.quote.changePercent ?? 0)}`} />
-            <Metric icon={<Gauge size={18} />} label="实时连接" value={getRealtimeLabel(finnhubStatus)} />
+          <div className="hero-side">
+            <div className="hero-metrics">
+              <Metric icon={<CircleDollarSign size={18} />} label="最新价" value={loading ? "--" : `$${data?.quote.price.toFixed(2)}`} />
+              <Metric icon={<TrendingUp size={18} />} label="日内变化" value={loading ? "--" : `${formatSigned(data?.quote.changeAmount ?? 0)} / ${formatSignedPercent(data?.quote.changePercent ?? 0)}`} />
+              <Metric icon={<Gauge size={18} />} label="实时连接" value={getRealtimeLabel(finnhubStatus)} />
+            </div>
+            {keyMetricsExpanded ? (
+              <div className="performance-strip">
+                {performanceMetrics.map((metric) => (
+                  <div className="performance-item" key={metric.label}>
+                    <span>{metric.label}</span>
+                    <strong>{loading ? "--" : metric.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
                 </section>
 
@@ -1297,6 +1310,17 @@ function getExpandedKeyMetrics(staticInfo?: SecurityStaticInfo | null, calcInfo?
     { label: "5分钟", value: formatMetricPercent(calcInfo?.fiveMinutesChangeRate) },
     { label: "成交额", value: formatMetricCompact(calcInfo?.turnover) },
     { label: "资金流", value: formatMetricCompact(calcInfo?.capitalFlow) }
+  ];
+}
+
+function getPerformanceKeyMetrics(data?: DashboardData | null, calcInfo?: SecurityCalcInfo | null) {
+  return [
+    { label: "日内", value: formatSignedPercent(data?.quote.changePercent ?? 0) },
+    { label: "5分钟", value: formatMetricPercent(calcInfo?.fiveMinutesChangeRate) },
+    { label: "5日", value: formatMetricPercent(calcInfo?.fiveDayChangeRate) },
+    { label: "10日", value: formatMetricPercent(calcInfo?.tenDayChangeRate) },
+    { label: "半年", value: formatMetricPercent(calcInfo?.halfYearChangeRate) },
+    { label: "YTD", value: formatMetricPercent(calcInfo?.ytdChangeRate) }
   ];
 }
 

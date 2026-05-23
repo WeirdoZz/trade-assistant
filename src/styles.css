@@ -574,11 +574,46 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.hero-metrics {
+.hero-side {
   display: grid;
   align-self: start;
+  gap: 10px;
+  margin-top: 86px;
+}
+
+.hero-metrics {
+  display: grid;
   grid-template-columns: repeat(3, 142px);
   gap: 10px;
+}
+
+.performance-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 142px);
+  gap: 8px;
+}
+
+.performance-item {
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid rgba(147, 168, 190, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.performance-item span {
+  display: block;
+  color: #91a1b3;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.performance-item strong {
+  display: block;
+  margin-top: 6px;
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.2;
 }
 
 .metric {
@@ -1130,8 +1165,13 @@ button:disabled {
   }
 
   .hero-metrics,
+  .performance-strip,
   .portfolio-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .hero-side {
+    margin-top: 0;
   }
 
   .lower-grid {
