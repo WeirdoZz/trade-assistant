@@ -1,10 +1,14 @@
 const { loadDotEnv } = require("./env.cjs");
 const path = require("node:path");
 const https = require("node:https");
+const { Period, AdjustType, TradeSessions } = require("longbridge");
 const { defaultWatchlist } = require("./watchlist.cjs");
 const { getLongbridgeQuoteContext, getLongbridgeStatus } = require("./longbridgeClient.cjs");
 
 loadDotEnv(path.join(__dirname, "../.."));
+
+const LONGBRIDGE_DAILY_CANDLE_COUNT = 90;
+const longbridgeCandlestickCache = new Map();
 
 function makeRandom(seedText) {
   let seed = 0;
@@ -327,6 +331,82 @@ function quoteFieldsFromLongbridgeQuote(quote) {
   };
 }
 
+function candlestickTimestampToDate(timestamp) {
+  if (timestamp instanceof Date) {
+    return timestamp.toISOString().slice(0, 10);
+  }
+
+  const numeric = Number(timestamp);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return new Date(numeric > 1_000_000_000_000 ? numeric : numeric * 1000).toISOString().slice(0, 10);
+  }
+
+  return null;
+}
+
+function candlestickToPrice(candlestick) {
+  const date = candlestickTimestampToDate(candlestick?.timestamp ?? candlestick?.t);
+  const close = decimalToNumber(candlestick?.close);
+  const open = decimalToNumber(candlestick?.open);
+  const high = decimalToNumber(candlestick?.high);
+  const low = decimalToNumber(candlestick?.low);
+
+  if (!date || !Number.isFinite(close)) {
+    return null;
+  }
+
+  return {
+    date,
+    open: Number.isFinite(open) ? open : close,
+    high: Number.isFinite(high) ? high : close,
+    low: Number.isFinite(low) ? low : close,
+    close,
+    volume: Number(candlestick?.volume ?? 0),
+    turnover: decimalToNumber(candlestick?.turnover)
+  };
+}
+
+function candlesticksToPrices(candlesticks) {
+  return (Array.isArray(candlesticks) ? candlesticks : [])
+    .map(candlestickToPrice)
+    .filter(Boolean)
+    .sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function summarizeCandlestickPrices(prices) {
+  if (!Array.isArray(prices) || prices.length === 0) {
+    return { count: 0 };
+  }
+
+  const first = prices[0];
+  const last = prices[prices.length - 1];
+  return {
+    count: prices.length,
+    firstDate: first.date,
+    firstClose: first.close,
+    lastDate: last.date,
+    lastClose: last.close
+  };
+}
+
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getLongbridgeCandlestickCacheKey({ symbol, count, cacheDate }) {
+  return [
+    toLongbridgeSymbol(symbol),
+    "Period.Day",
+    count,
+    "AdjustType.NoAdjust",
+    "TradeSessions.Intraday",
+    cacheDate
+  ].join("|");
+}
+
 async function fetchLongbridgeQuotes(symbols) {
   const normalized = [...new Set(symbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean))];
   if (normalized.length === 0 || process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES === "1") {
@@ -345,6 +425,109 @@ async function fetchLongbridgeQuotes(symbols) {
   } catch (error) {
     console.warn("Longbridge quote unavailable:", formatFinnhubError(error));
     return [];
+  }
+}
+
+async function fetchLongbridgeCandlesticks(symbols, count = LONGBRIDGE_DAILY_CANDLE_COUNT, options = {}) {
+  const {
+    getStatus = getLongbridgeStatus,
+    getContext = getLongbridgeQuoteContext,
+    now = () => new Date()
+  } = options;
+  const normalized = [...new Set(symbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean))];
+  if (normalized.length === 0 || process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES === "1") {
+    console.info("[longbridge:kline] skipped", {
+      reason: normalized.length === 0 ? "empty symbols" : "disabled by TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES",
+      symbols: normalized,
+      count
+    });
+    return new Map();
+  }
+
+  const cacheDisabled = process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_KLINE_CACHE === "1";
+  const cacheDate = getLocalDateKey(now());
+  const result = new Map();
+  const misses = [];
+
+  for (const symbol of normalized) {
+    const cacheKey = getLongbridgeCandlestickCacheKey({ symbol, count, cacheDate });
+    const cached = cacheDisabled ? null : longbridgeCandlestickCache.get(cacheKey);
+    if (cached) {
+      console.info("[longbridge:kline] cache hit", {
+        symbol: toLongbridgeSymbol(symbol),
+        requestCount: count,
+        cacheDate,
+        cachedBars: cached.length,
+        summary: summarizeCandlestickPrices(cached)
+      });
+      result.set(symbol, cached);
+    } else {
+      console.info("[longbridge:kline] cache miss", {
+        symbol: toLongbridgeSymbol(symbol),
+        count,
+        cacheDate,
+        cacheDisabled
+      });
+      misses.push({ symbol, cacheKey });
+    }
+  }
+
+  if (misses.length === 0) {
+    return result;
+  }
+
+  const status = getStatus();
+  if (!status.configured || !status.tokenExists) {
+    console.info("[longbridge:kline] skipped", {
+      reason: !status.configured ? "missing LONGBRIDGE_CLIENT_ID" : "missing stored OAuth token",
+      configured: status.configured,
+      tokenExists: status.tokenExists,
+      tokenPath: status.tokenPath,
+      symbols: normalized,
+      count
+    });
+    return new Map();
+  }
+
+  try {
+    const ctx = await getContext();
+    console.info("[longbridge:kline] request", {
+      symbols: misses.map((item) => toLongbridgeSymbol(item.symbol)),
+      period: "Day",
+      count,
+      adjustType: "NoAdjust",
+      tradeSession: "Intraday"
+    });
+    const entries = await Promise.all(misses.map(async ({ symbol, cacheKey }) => {
+      const longbridgeSymbol = toLongbridgeSymbol(symbol);
+      const response = await ctx.candlesticks(
+        longbridgeSymbol,
+        Period.Day,
+        count,
+        AdjustType.NoAdjust,
+        TradeSessions.Intraday
+      );
+      const rawCandlesticks = Array.isArray(response) ? response : response?.candlesticks;
+      const prices = candlesticksToPrices(rawCandlesticks);
+      console.info("[longbridge:kline] response", {
+        symbol: longbridgeSymbol,
+        rawCount: Array.isArray(rawCandlesticks) ? rawCandlesticks.length : 0,
+        ...summarizeCandlestickPrices(prices)
+      });
+      if (!cacheDisabled) {
+        longbridgeCandlestickCache.set(cacheKey, prices);
+      }
+      return [symbol, prices];
+    }));
+
+    for (const [symbol, prices] of entries) {
+      result.set(symbol, prices);
+    }
+
+    return result;
+  } catch (error) {
+    console.warn("[longbridge:kline] unavailable", formatLongbridgeErrorDetail(error));
+    return result;
   }
 }
 
@@ -368,9 +551,41 @@ function formatFinnhubError(error) {
   return JSON.stringify(error);
 }
 
+function formatLongbridgeErrorDetail(error) {
+  if (!error || typeof error !== "object") {
+    return formatFinnhubError(error);
+  }
+
+  const detail = {
+    name: error.name,
+    message: error.message,
+    code: error.code,
+    statusCode: error.statusCode,
+    businessCode: error.businessCode,
+    data: error.data,
+    cause: error.cause?.message ?? error.cause
+  };
+  const compact = Object.fromEntries(
+    Object.entries(detail).filter(([, value]) => value !== undefined && value !== null && value !== "")
+  );
+
+  return Object.keys(compact).length > 0 ? compact : formatFinnhubError(error);
+}
+
 async function getDashboard(symbol = "NVDA") {
-  const quote = (await fetchLongbridgeQuotes([symbol]))[0];
-  return quote ? buildDashboardFromLongbridgeQuote(symbol, quote) : buildFallbackDashboard(symbol);
+  const [quotes, candlesBySymbol] = await Promise.all([
+    fetchLongbridgeQuotes([symbol]),
+    fetchLongbridgeCandlesticks([symbol])
+  ]);
+  const normalized = String(symbol || "NVDA").trim().toUpperCase();
+  const quote = quotes[0];
+  const prices = candlesBySymbol.get(normalized) ?? [];
+
+  if (quote || prices.length > 0) {
+    return buildDashboardFromLongbridgeQuote(symbol, quote, prices);
+  }
+
+  return buildFallbackDashboard(symbol);
 }
 
 function buildSeries(symbol, days = 30, baseOverride) {
@@ -405,8 +620,10 @@ function calculateChange(points, period) {
   return { amount, percent };
 }
 
-function makeMarketCard({ symbol, name, kind, base }, quote = null) {
-  const prices = buildSeries(symbol, 30, base);
+function makeMarketCard({ symbol, name, kind, base }, quote = null, pricesOverride = null) {
+  const prices = Array.isArray(pricesOverride) && pricesOverride.length > 0
+    ? pricesOverride
+    : buildSeries(symbol, 30, base);
   const fallbackLatest = prices[prices.length - 1].close;
   const latest = Number(quote?.c ?? fallbackLatest);
   const previousClose = Number(quote?.pc ?? prices[prices.length - 2]?.close ?? latest);
@@ -435,17 +652,22 @@ function makeMarketCard({ symbol, name, kind, base }, quote = null) {
   };
 }
 
-function buildDashboardFromLongbridgeQuote(symbol, quote) {
+function buildDashboardFromLongbridgeQuote(symbol, quote, candlestickPrices = null) {
   const dashboard = buildFallbackDashboard(symbol);
   const fields = quoteFieldsFromLongbridgeQuote(quote) || {};
   const normalized = String(symbol || fields.symbol || dashboard.symbol).trim().toUpperCase();
-  const price = Number(fields.c ?? dashboard.quote.price);
-  const previousClose = Number(fields.pc ?? dashboard.quote.previousClose ?? price);
+  const longbridgePrices = Array.isArray(candlestickPrices) && candlestickPrices.length > 0
+    ? candlestickPrices
+    : null;
+  const lastCandleClose = longbridgePrices?.at(-1)?.close;
+  const previousCandleClose = longbridgePrices?.at(-2)?.close;
+  const price = Number(fields.c ?? lastCandleClose ?? dashboard.quote.price);
+  const previousClose = Number(fields.pc ?? previousCandleClose ?? dashboard.quote.previousClose ?? price);
   const changeAmount = Number(fields.d ?? (price - previousClose));
   const changePercent = Number(fields.dp ?? (previousClose === 0 ? 0 : (changeAmount / previousClose) * 100));
   const updatedAt = fields.updatedAt || new Date().toISOString();
 
-  const prices = dashboard.prices.length
+  const prices = longbridgePrices ?? (dashboard.prices.length
     ? [
       ...dashboard.prices.slice(0, -1),
       {
@@ -453,7 +675,7 @@ function buildDashboardFromLongbridgeQuote(symbol, quote) {
         close: Number(price.toFixed(2))
       }
     ]
-    : dashboard.prices;
+    : dashboard.prices);
 
   return {
     ...dashboard,
@@ -496,14 +718,18 @@ async function getMarketOverview(watchlistItems = defaultWatchlist) {
     .map(toStockDefinition)
     .filter((item) => item.symbol);
 
-  const longbridgeQuotes = await fetchLongbridgeQuotes(watchlistDefinitions.map((item) => item.symbol));
+  const watchlistSymbols = watchlistDefinitions.map((item) => item.symbol);
+  const [longbridgeQuotes, candlesBySymbol] = await Promise.all([
+    fetchLongbridgeQuotes(watchlistSymbols),
+    fetchLongbridgeCandlesticks(watchlistSymbols)
+  ]);
   const quoteBySymbol = new Map(longbridgeQuotes.map((quote) => [
     fromLongbridgeSymbol(quote.symbol),
     quoteFieldsFromLongbridgeQuote(quote)
   ]));
   const indexes = indexDefinitions.map(makeMarketCard);
   const watchlist = watchlistDefinitions.map((definition) => (
-    makeMarketCard(definition, quoteBySymbol.get(definition.symbol))
+    makeMarketCard(definition, quoteBySymbol.get(definition.symbol), candlesBySymbol.get(definition.symbol))
   ));
 
   return {
@@ -545,10 +771,13 @@ async function fetchUsSymbols() {
 module.exports = {
   buildDashboardFromFinnhub,
   buildDashboardFromLongbridgeQuote,
+  candlesticksToPrices,
+  fetchLongbridgeCandlesticks,
   fetchLongbridgeQuotes,
   getDashboard,
   getFinnhubClient,
   getFinnhubApiKey,
   getMarketOverview,
+  makeMarketCard,
   fetchUsSymbols
 };
