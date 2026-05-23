@@ -100,3 +100,25 @@ test("finnhub socket reconnects even before a renderer sender exists", async () 
     assert.equal(FakeWebSocket.instances.length, 2);
   });
 });
+
+test("setSymbols unsubscribes symbols missing from the next watchlist", async () => {
+  await withFinnhubKey(() => {
+    const realtime = new FinnhubRealtime({
+      WebSocketClass: FakeWebSocket,
+      logger: { info() {}, warn() {} }
+    });
+    const sender = createSender();
+
+    realtime.setSymbols(sender, ["NVDA", "MSFT"]);
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.sent = [];
+
+    const result = realtime.setSymbols(sender, ["NVDA"]);
+
+    assert.deepEqual(result.symbols, ["NVDA"]);
+    assert.deepEqual(socket.sent.map((payload) => JSON.parse(payload)), [
+      { type: "unsubscribe", symbol: "MSFT" }
+    ]);
+  });
+});

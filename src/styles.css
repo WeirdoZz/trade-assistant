@@ -594,8 +594,8 @@ button:disabled {
 }
 
 .market-summary-card {
+  position: relative;
   display: grid;
-  gap: 14px;
   min-height: 214px;
   padding: 16px;
   border: 1px solid rgba(147, 168, 190, 0.15);
@@ -608,6 +608,64 @@ button:disabled {
 .market-summary-card:hover {
   border-color: rgba(114, 211, 255, 0.52);
   background: rgba(20, 34, 45, 0.94);
+}
+
+.market-card-action {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.market-card-menu-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #dbe5ef;
+}
+
+.market-card-menu-button:hover,
+.market-card-menu-button[aria-expanded="true"] {
+  background: rgba(114, 211, 255, 0.18);
+  color: #ffffff;
+}
+
+.market-card-menu {
+  position: absolute;
+  z-index: 12;
+  top: 40px;
+  right: 10px;
+  min-width: 92px;
+  padding: 4px;
+  border: 1px solid rgba(147, 168, 190, 0.2);
+  border-radius: 7px;
+  background: #101820;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+}
+
+.market-card-menu button {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: transparent;
+  color: #ffb4a8;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.market-card-menu button:hover {
+  background: rgba(255, 139, 127, 0.12);
 }
 
 .market-summary-card.positive {
@@ -624,6 +682,10 @@ button:disabled {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.market-card-head {
+  padding-right: 34px;
 }
 
 .market-card-head strong,

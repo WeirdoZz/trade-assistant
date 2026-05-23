@@ -70,6 +70,11 @@ function registerIpcHandlers() {
     finnhubRealtime.subscribe(event.sender, item?.symbol);
     return items;
   });
+  ipcMain.handle("watchlist:remove", (_event, symbol) => {
+    const items = watchlistStore.removeWatchlistItem(symbol);
+    finnhubRealtime.unsubscribe(symbol);
+    return items;
+  });
   ipcMain.handle("finnhub:subscribe", (event, symbol) => finnhubRealtime.subscribe(event.sender, symbol));
   ipcMain.handle("finnhub:unsubscribe", () => {
     finnhubRealtime.unsubscribe();

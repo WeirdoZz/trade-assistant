@@ -43,7 +43,7 @@ function createWatchlistStore(userDataPath) {
         return defaultWatchlist;
       }
 
-      return normalized.length ? normalized : defaultWatchlist;
+      return normalized;
     } catch (error) {
       console.warn("Watchlist read failed, using defaults:", error.message);
       return defaultWatchlist;
@@ -77,9 +77,21 @@ function createWatchlistStore(userDataPath) {
     return next;
   }
 
+  function removeWatchlistItem(symbol) {
+    const normalized = normalizeSymbol(symbol);
+    if (!normalized) {
+      throw new Error("Missing symbol");
+    }
+
+    const next = readWatchlist().filter((entry) => entry.symbol !== normalized);
+    writeWatchlist(next);
+    return next;
+  }
+
   return {
     readWatchlist,
     addWatchlistItem,
+    removeWatchlistItem,
     filePath
   };
 }

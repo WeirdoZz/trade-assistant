@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("tradeAssistant", {
   getMarketOverview: () => ipcRenderer.invoke("market-overview:get"),
   getUsSymbols: () => ipcRenderer.invoke("symbols:list-us"),
   addWatchlistItem: (item) => ipcRenderer.invoke("watchlist:add", item),
+  removeWatchlistItem: (symbol) => ipcRenderer.invoke("watchlist:remove", symbol),
   subscribeFinnhub: (symbol) => ipcRenderer.invoke("finnhub:subscribe", symbol),
   unsubscribeFinnhub: () => ipcRenderer.invoke("finnhub:unsubscribe"),
   onFinnhubStatus: (handler) => {

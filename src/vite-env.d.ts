@@ -7,6 +7,7 @@ interface Window {
     getMarketOverview: () => Promise<MarketOverviewData>;
     getUsSymbols: () => Promise<SymbolSearchResult[]>;
     addWatchlistItem: (item: WatchlistItem) => Promise<WatchlistItem[]>;
+    removeWatchlistItem: (symbol: string) => Promise<WatchlistItem[]>;
     subscribeFinnhub: (symbol: string) => Promise<FinnhubStatus>;
     unsubscribeFinnhub: () => Promise<FinnhubStatus>;
     onFinnhubStatus: (handler: (status: FinnhubStatus) => void) => () => void;

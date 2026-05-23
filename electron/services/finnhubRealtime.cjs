@@ -56,7 +56,35 @@ class FinnhubRealtime {
   }
 
   setSymbols(sender, symbols) {
-    return this.addSymbols(sender, symbols);
+    this.addSender(sender);
+
+    const nextSymbols = new Set(
+      symbols
+        .map(normalizeSymbol)
+        .filter(Boolean)
+    );
+
+    for (const symbol of [...this.symbols]) {
+      if (!nextSymbols.has(symbol)) {
+        this.symbols.delete(symbol);
+        this.sendSubscription("unsubscribe", symbol);
+      }
+    }
+
+    for (const symbol of nextSymbols) {
+      if (!this.symbols.has(symbol)) {
+        this.symbols.add(symbol);
+        this.sendSubscription("subscribe", symbol);
+      }
+    }
+
+    if (this.symbols.size === 0) {
+      this.closeSocket();
+      return { connected: false, symbols: [] };
+    }
+
+    this.ensureSocket();
+    return { connected: this.connected, symbols: [...this.symbols] };
   }
 
   addSender(sender) {

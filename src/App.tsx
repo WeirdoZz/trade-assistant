@@ -12,6 +12,7 @@ import {
   Database,
   Gauge,
   LineChart,
+  MoreHorizontal,
   Newspaper,
   Plus,
   RefreshCw,
@@ -91,6 +92,13 @@ function addBrowserWatchlistItem(item: WatchlistItem) {
   }
 
   const next = [...current, { symbol, name: item.name || symbol }];
+  window.localStorage.setItem(browserWatchlistKey, JSON.stringify(next));
+  return next;
+}
+
+function removeBrowserWatchlistItem(symbol: string) {
+  const normalized = symbol.trim().toUpperCase();
+  const next = getBrowserWatchlist().filter((item) => item.symbol !== normalized);
   window.localStorage.setItem(browserWatchlistKey, JSON.stringify(next));
   return next;
 }
@@ -482,6 +490,27 @@ function App() {
     setWatchlistVersion((version) => version + 1);
   };
 
+  const removeFromWatchlist = async (symbolToRemove: string) => {
+    const normalized = symbolToRemove.trim().toUpperCase();
+    if (!normalized) {
+      return;
+    }
+
+    if (window.tradeAssistant) {
+      await window.tradeAssistant.removeWatchlistItem(normalized);
+    } else {
+      removeBrowserWatchlistItem(normalized);
+    }
+
+    setOverviewData((current) => current
+      ? {
+        ...current,
+        watchlist: current.watchlist.filter((card) => card.symbol !== normalized)
+      }
+      : current);
+    setWatchlistVersion((version) => version + 1);
+  };
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -559,6 +588,7 @@ function App() {
                 loading={overviewLoading}
                 onOpenDetail={openResearchDetail}
                 onAddWatchlist={addToWatchlist}
+                onRemoveWatchlist={removeFromWatchlist}
                 symbols={usSymbols}
               />
             ) : (
@@ -846,12 +876,14 @@ function MarketOverview({
   loading,
   onOpenDetail,
   onAddWatchlist,
+  onRemoveWatchlist,
   symbols
 }: {
   data: MarketOverviewData | null;
   loading: boolean;
   onOpenDetail: (symbol: string) => void;
   onAddWatchlist: (item: WatchlistItem) => Promise<void>;
+  onRemoveWatchlist: (symbol: string) => Promise<void>;
   symbols: SymbolSearchResult[];
 }) {
   const watchCards = data?.watchlist ?? [];
@@ -884,7 +916,12 @@ function MarketOverview({
         </div>
         <div className="market-card-grid watch">
           {watchCards.map((card) => (
-            <MarketSummaryCard card={card} key={card.symbol} onOpenDetail={onOpenDetail} />
+            <MarketSummaryCard
+              card={card}
+              key={card.symbol}
+              onOpenDetail={onOpenDetail}
+              onRemove={onRemoveWatchlist}
+            />
           ))}
         </div>
       </section>
@@ -981,31 +1018,72 @@ function WatchlistSearch({
 
 function MarketSummaryCard({
   card,
-  onOpenDetail
+  onOpenDetail,
+  onRemove
 }: {
   card: MarketCard;
   onOpenDetail: (symbol: string) => void;
+  onRemove: (symbol: string) => Promise<void>;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  const removeCard = async () => {
+    setRemoving(true);
+    try {
+      await onRemove(card.symbol);
+      setMenuOpen(false);
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   return (
-    <button className={`market-summary-card ${card.dayChange.percent >= 0 ? "positive" : "negative"}`} onClick={() => onOpenDetail(card.symbol)}>
-      <div className="market-card-head">
-        <div>
-          <strong>{card.symbol}</strong>
-          <span>{card.name}</span>
+    <article
+      className={`market-summary-card ${card.dayChange.percent >= 0 ? "positive" : "negative"}`}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setMenuOpen(false);
+        }
+      }}
+    >
+      <button className="market-card-action" type="button" onClick={() => onOpenDetail(card.symbol)}>
+        <div className="market-card-head">
+          <div>
+            <strong>{card.symbol}</strong>
+            <span>{card.name}</span>
+          </div>
+          <ChangeText change={card.dayChange} />
         </div>
-        <ChangeText change={card.dayChange} />
-      </div>
-      <div className="market-price-row">
-        <b>{formatPrice(card)}</b>
-        <span>今日 {formatSigned(card.dayChange.amount)} / {formatSignedPercent(card.dayChange.percent)}</span>
-      </div>
-      <Sparkline values={card.sparkline} positive={card.dayChange.percent >= 0} />
-      <div className="period-grid">
-        <PeriodCell label="5日" value={card.performance["5d"]} />
-        <PeriodCell label="10日" value={card.performance["10d"]} />
-        <PeriodCell label="15日" value={card.performance["15d"]} />
-      </div>
-    </button>
+        <div className="market-price-row">
+          <b>{formatPrice(card)}</b>
+          <span>今日 {formatSigned(card.dayChange.amount)} / {formatSignedPercent(card.dayChange.percent)}</span>
+        </div>
+        <Sparkline values={card.sparkline} positive={card.dayChange.percent >= 0} />
+        <div className="period-grid">
+          <PeriodCell label="5日" value={card.performance["5d"]} />
+          <PeriodCell label="10日" value={card.performance["10d"]} />
+          <PeriodCell label="15日" value={card.performance["15d"]} />
+        </div>
+      </button>
+      <button
+        className="market-card-menu-button"
+        type="button"
+        aria-label={`${card.symbol} 更多操作`}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        <MoreHorizontal size={18} />
+      </button>
+      {menuOpen ? (
+        <div className="market-card-menu" role="menu">
+          <button type="button" role="menuitem" onClick={removeCard} disabled={removing}>
+            Remove
+          </button>
+        </div>
+      ) : null}
+    </article>
   );
 }
 
