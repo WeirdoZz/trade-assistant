@@ -2,6 +2,7 @@ const { loadDotEnv } = require("./env.cjs");
 const path = require("node:path");
 const https = require("node:https");
 const { defaultWatchlist } = require("./watchlist.cjs");
+const { getLongbridgeQuoteContext, getLongbridgeStatus } = require("./longbridgeClient.cjs");
 
 loadDotEnv(path.join(__dirname, "../.."));
 
@@ -161,13 +162,14 @@ function requestFinnhub(pathname, params = {}, { timeout = 20_000 } = {}) {
   return requestJson(url, { timeout });
 }
 
-function requestJson(url, { timeout, redirectsLeft = 4 }) {
+function requestJson(url, { timeout, redirectsLeft = 4, headers = {} }) {
   return new Promise((resolve, reject) => {
     const request = https.get(url, {
       timeout,
       headers: {
         accept: "application/json",
-        "user-agent": "trade-assistant/0.1"
+        "user-agent": "trade-assistant/0.1",
+        ...headers
       }
     }, (response) => {
       if (
@@ -184,7 +186,8 @@ function requestJson(url, { timeout, redirectsLeft = 4 }) {
 
         requestJson(new URL(response.headers.location, url), {
           timeout,
-          redirectsLeft: redirectsLeft - 1
+          redirectsLeft: redirectsLeft - 1,
+          headers
         }).then(resolve, reject);
         return;
       }
@@ -264,17 +267,85 @@ function withTimeout(promise, milliseconds, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function getFinnhubDashboard(symbol) {
-  if (!getFinnhubApiKey()) {
+function toLongbridgeSymbol(symbol) {
+  const normalized = String(symbol || "").trim().toUpperCase();
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.includes(".") ? normalized : `${normalized}.US`;
+}
+
+function fromLongbridgeSymbol(symbol) {
+  return String(symbol || "").trim().toUpperCase().replace(/\.US$/, "");
+}
+
+function decimalToNumber(value) {
+  if (value === undefined || value === null) {
+    return NaN;
+  }
+
+  return Number(value);
+}
+
+function quoteTimestampToIso(timestamp) {
+  if (timestamp instanceof Date) {
+    return timestamp.toISOString();
+  }
+
+  const numeric = Number(timestamp);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return new Date(numeric > 1_000_000_000_000 ? numeric : numeric * 1000).toISOString();
+  }
+
+  return new Date().toISOString();
+}
+
+function quoteFieldsFromLongbridgeQuote(quote) {
+  if (!quote) {
     return null;
   }
 
-  const normalized = String(symbol || "NVDA").trim().toUpperCase();
-  const quote = await callFinnhubWithRetry("quote", normalized);
+  const currentPrice = decimalToNumber(quote.lastDone ?? quote.last_done);
+  const previousClose = decimalToNumber(quote.prevClose ?? quote.prev_close);
+  if (!Number.isFinite(currentPrice) || !Number.isFinite(previousClose)) {
+    return null;
+  }
 
-  return buildDashboardFromFinnhub(normalized, {
-    quote
-  });
+  const changeAmount = currentPrice - previousClose;
+  const changePercent = previousClose === 0 ? 0 : (changeAmount / previousClose) * 100;
+  const timestamp = quote.timestamp ?? quote.t;
+
+  return {
+    symbol: fromLongbridgeSymbol(quote.symbol),
+    c: currentPrice,
+    pc: previousClose,
+    d: changeAmount,
+    dp: changePercent,
+    t: timestamp instanceof Date ? Math.floor(timestamp.getTime() / 1000) : timestamp,
+    updatedAt: quoteTimestampToIso(timestamp)
+  };
+}
+
+async function fetchLongbridgeQuotes(symbols) {
+  const normalized = [...new Set(symbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean))];
+  if (normalized.length === 0 || process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES === "1") {
+    return [];
+  }
+
+  const status = getLongbridgeStatus();
+  if (!status.configured || !status.tokenExists) {
+    return [];
+  }
+
+  try {
+    const ctx = await getLongbridgeQuoteContext();
+    const quotes = await ctx.quote(normalized.map(toLongbridgeSymbol));
+    return Array.isArray(quotes) ? quotes : [quotes];
+  } catch (error) {
+    console.warn("Longbridge quote unavailable:", formatFinnhubError(error));
+    return [];
+  }
 }
 
 function formatFinnhubError(error) {
@@ -298,12 +369,8 @@ function formatFinnhubError(error) {
 }
 
 async function getDashboard(symbol = "NVDA") {
-  try {
-    return await getFinnhubDashboard(symbol) ?? buildFallbackDashboard(symbol);
-  } catch (error) {
-    console.warn("Finnhub dashboard unavailable, using fallback data:", formatFinnhubError(error));
-    return buildFallbackDashboard(symbol);
-  }
+  const quote = (await fetchLongbridgeQuotes([symbol]))[0];
+  return quote ? buildDashboardFromLongbridgeQuote(symbol, quote) : buildFallbackDashboard(symbol);
 }
 
 function buildSeries(symbol, days = 30, baseOverride) {
@@ -345,6 +412,9 @@ function makeMarketCard({ symbol, name, kind, base }, quote = null) {
   const previousClose = Number(quote?.pc ?? prices[prices.length - 2]?.close ?? latest);
   const dayAmount = Number(quote?.d ?? (latest - previousClose));
   const dayPercent = Number(quote?.dp ?? (previousClose === 0 ? 0 : (dayAmount / previousClose) * 100));
+  const updatedAt = Number(quote?.t)
+    ? new Date(Number(quote.t) * 1000).toISOString()
+    : new Date().toISOString();
 
   return {
     symbol,
@@ -360,8 +430,43 @@ function makeMarketCard({ symbol, name, kind, base }, quote = null) {
       "10d": calculateChange(prices, 10),
       "15d": calculateChange(prices, 15)
     },
-    updatedAt: new Date().toISOString().slice(0, 10),
+    updatedAt,
     sparkline: prices.slice(-16).map((point) => point.close)
+  };
+}
+
+function buildDashboardFromLongbridgeQuote(symbol, quote) {
+  const dashboard = buildFallbackDashboard(symbol);
+  const fields = quoteFieldsFromLongbridgeQuote(quote) || {};
+  const normalized = String(symbol || fields.symbol || dashboard.symbol).trim().toUpperCase();
+  const price = Number(fields.c ?? dashboard.quote.price);
+  const previousClose = Number(fields.pc ?? dashboard.quote.previousClose ?? price);
+  const changeAmount = Number(fields.d ?? (price - previousClose));
+  const changePercent = Number(fields.dp ?? (previousClose === 0 ? 0 : (changeAmount / previousClose) * 100));
+  const updatedAt = fields.updatedAt || new Date().toISOString();
+
+  const prices = dashboard.prices.length
+    ? [
+      ...dashboard.prices.slice(0, -1),
+      {
+        ...dashboard.prices[dashboard.prices.length - 1],
+        close: Number(price.toFixed(2))
+      }
+    ]
+    : dashboard.prices;
+
+  return {
+    ...dashboard,
+    symbol: normalized,
+    quote: {
+      ...dashboard.quote,
+      price: Number(price.toFixed(2)),
+      changeAmount: Number(changeAmount.toFixed(2)),
+      changePercent: Number(changePercent.toFixed(2)),
+      previousClose: Number(previousClose.toFixed(2)),
+      updatedAt
+    },
+    prices
   };
 }
 
@@ -380,20 +485,6 @@ function toStockDefinition(item) {
   };
 }
 
-async function buildMarketCardWithQuote(definition) {
-  if (!getFinnhubApiKey()) {
-    return makeMarketCard(definition);
-  }
-
-  try {
-    const quote = await callFinnhubWithRetry("quote", definition.symbol);
-    return makeMarketCard(definition, quote);
-  } catch (error) {
-    console.warn(`Finnhub quote unavailable for ${definition.symbol}, using fallback card:`, formatFinnhubError(error));
-    return makeMarketCard(definition);
-  }
-}
-
 async function getMarketOverview(watchlistItems = defaultWatchlist) {
   const indexDefinitions = [
     { symbol: "IXIC", name: "Nasdaq Composite", kind: "index", base: 18940 },
@@ -405,10 +496,15 @@ async function getMarketOverview(watchlistItems = defaultWatchlist) {
     .map(toStockDefinition)
     .filter((item) => item.symbol);
 
-  const [indexes, watchlist] = await Promise.all([
-    Promise.all(indexDefinitions.map(buildMarketCardWithQuote)),
-    Promise.all(watchlistDefinitions.map(buildMarketCardWithQuote))
-  ]);
+  const longbridgeQuotes = await fetchLongbridgeQuotes(watchlistDefinitions.map((item) => item.symbol));
+  const quoteBySymbol = new Map(longbridgeQuotes.map((quote) => [
+    fromLongbridgeSymbol(quote.symbol),
+    quoteFieldsFromLongbridgeQuote(quote)
+  ]));
+  const indexes = indexDefinitions.map(makeMarketCard);
+  const watchlist = watchlistDefinitions.map((definition) => (
+    makeMarketCard(definition, quoteBySymbol.get(definition.symbol))
+  ));
 
   return {
     updatedAt: new Date().toISOString(),
@@ -448,6 +544,8 @@ async function fetchUsSymbols() {
 
 module.exports = {
   buildDashboardFromFinnhub,
+  buildDashboardFromLongbridgeQuote,
+  fetchLongbridgeQuotes,
   getDashboard,
   getFinnhubClient,
   getFinnhubApiKey,

@@ -44,13 +44,32 @@ function createWindow() {
   } else {
     win.loadFile(path.join(__dirname, "../dist/index.html"));
   }
+
+  win.webContents.once("did-finish-load", () => {
+    subscribeWatchlistSymbols(win.webContents);
+  });
+
+  return win;
+}
+
+function subscribeWatchlistSymbols(sender) {
+  const symbols = watchlistStore.readWatchlist().map((item) => item.symbol);
+  finnhubRealtime.setSymbols(sender, symbols);
 }
 
 function registerIpcHandlers() {
   ipcMain.handle("dashboard:get", (_event, symbol) => getDashboard(symbol));
-  ipcMain.handle("market-overview:get", () => getMarketOverview(watchlistStore.readWatchlist()));
+  ipcMain.handle("market-overview:get", async (event) => {
+    const payload = await getMarketOverview(watchlistStore.readWatchlist());
+    subscribeWatchlistSymbols(event.sender);
+    return payload;
+  });
   ipcMain.handle("symbols:list-us", () => symbolStore.readSymbols());
-  ipcMain.handle("watchlist:add", (_event, item) => watchlistStore.addWatchlistItem(item));
+  ipcMain.handle("watchlist:add", (event, item) => {
+    const items = watchlistStore.addWatchlistItem(item);
+    finnhubRealtime.subscribe(event.sender, item?.symbol);
+    return items;
+  });
   ipcMain.handle("finnhub:subscribe", (event, symbol) => finnhubRealtime.subscribe(event.sender, symbol));
   ipcMain.handle("finnhub:unsubscribe", () => {
     finnhubRealtime.unsubscribe();
@@ -82,6 +101,7 @@ function createServices() {
 app.whenReady().then(() => {
   createServices();
   registerIpcHandlers();
+  subscribeWatchlistSymbols(null);
   createWindow();
   void startupTasks.run();
 
@@ -96,4 +116,8 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  finnhubRealtime.closeSocket();
 });

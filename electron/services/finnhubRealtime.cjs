@@ -8,87 +8,154 @@ function getApiKey() {
   return ((process.env.FINNHUB_API_KEY || process.env.FINNHU_API_KEY || "").trim());
 }
 
+function normalizeSymbol(symbol) {
+  return String(symbol || "").trim().toUpperCase();
+}
+
 class FinnhubRealtime {
-  constructor() {
+  constructor({ reconnectDelay = 2000, WebSocketClass = WebSocket, logger = console } = {}) {
+    this.WebSocketClass = WebSocketClass;
+    this.logger = logger;
     this.socket = null;
-    this.sender = null;
-    this.symbol = null;
-    this.subscriptionId = 0;
+    this.senders = new Set();
+    this.symbols = new Set();
+    this.connected = false;
+    this.reconnectDelay = reconnectDelay;
+    this.reconnectTimer = null;
+    this.shouldReconnect = true;
   }
 
   subscribe(sender, symbol) {
-    const apiKey = getApiKey();
-    const normalized = String(symbol || "").trim().toUpperCase();
-    const subscriptionId = this.subscriptionId + 1;
+    return this.addSymbols(sender, [symbol]);
+  }
 
-    this.unsubscribe();
-    this.subscriptionId = subscriptionId;
+  addSymbols(sender, symbols) {
+    this.addSender(sender);
 
-    if (!apiKey || !normalized) {
-      this.safeSend(sender, "finnhub:status", {
-        connected: false,
-        symbol: normalized,
-        message: apiKey ? "Missing symbol" : "Missing FINNHUB_API_KEY"
+    const normalizedSymbols = symbols
+      .map(normalizeSymbol)
+      .filter(Boolean);
+
+    if (normalizedSymbols.length === 0) {
+      this.broadcastStatus({
+        connected: this.connected,
+        message: "Missing symbol"
       });
-      return { connected: false };
+      return { connected: this.connected, symbols: [...this.symbols] };
     }
 
-    this.sender = sender;
-    this.symbol = normalized;
-    this.socket = new WebSocket(`wss://ws.finnhub.io?token=${encodeURIComponent(apiKey)}`);
-
-    this.socket.on("open", () => {
-      if (this.subscriptionId !== subscriptionId) {
-        return;
+    for (const symbol of normalizedSymbols) {
+      if (!this.symbols.has(symbol)) {
+        this.symbols.add(symbol);
+        this.sendSubscription("subscribe", symbol);
       }
+    }
 
-      this.socket?.send(JSON.stringify({ type: "subscribe", symbol: normalized }));
-      this.safeSend(sender, "finnhub:status", {
+    this.ensureSocket();
+    return { connected: this.connected, symbols: [...this.symbols] };
+  }
+
+  setSymbols(sender, symbols) {
+    return this.addSymbols(sender, symbols);
+  }
+
+  addSender(sender) {
+    if (!sender || sender.isDestroyed?.()) {
+      return;
+    }
+
+    if (this.senders.has(sender)) {
+      return;
+    }
+
+    this.senders.add(sender);
+    sender.once("destroyed", () => {
+      this.senders.delete(sender);
+    });
+  }
+
+  ensureSocket() {
+    const apiKey = getApiKey();
+    if (!apiKey || this.symbols.size === 0) {
+      this.broadcastStatus({
+        connected: false,
+        message: apiKey ? "Missing symbol" : "Missing FINNHUB_API_KEY"
+      });
+      return;
+    }
+
+    if (
+      this.socket &&
+      (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
+    this.shouldReconnect = true;
+    const socket = new this.WebSocketClass(`wss://ws.finnhub.io?token=${encodeURIComponent(apiKey)}`);
+    this.socket = socket;
+    this.logger.info?.(`[finnhub:ws] connecting symbols=${[...this.symbols].join(",")}`);
+
+    socket.on("open", () => {
+      this.connected = true;
+      for (const symbol of this.symbols) {
+        this.sendSubscription("subscribe", symbol);
+      }
+      this.logger.info?.(`[finnhub:ws] connected symbols=${[...this.symbols].join(",")}`);
+      this.broadcastStatus({
         connected: true,
-        symbol: normalized,
+        symbols: [...this.symbols],
         message: "connected"
       });
     });
 
-    this.socket.on("message", (data) => {
-      if (this.subscriptionId !== subscriptionId) {
-        return;
-      }
-
+    socket.on("message", (data) => {
       this.handleMessage(data);
     });
 
-    this.socket.on("error", () => {
-      if (this.subscriptionId !== subscriptionId) {
-        return;
-      }
-
-      this.safeSend(sender, "finnhub:status", {
+    socket.on("error", (error) => {
+      this.logger.warn?.(`[finnhub:ws] error ${error?.message || "unknown"}`);
+      this.broadcastStatus({
         connected: false,
-        symbol: normalized,
+        symbols: [...this.symbols],
         message: "websocket error"
       });
     });
 
-    this.socket.on("close", () => {
-      if (this.subscriptionId !== subscriptionId) {
-        return;
+    socket.on("close", (code, reason) => {
+      this.connected = false;
+      if (this.socket === socket) {
+        this.socket = null;
       }
-
-      this.safeSend(sender, "finnhub:status", {
+      const reasonText = reason ? String(reason) : "";
+      this.logger.info?.(`[finnhub:ws] closed code=${code ?? "unknown"} reason=${reasonText || "none"} symbols=${[...this.symbols].join(",")}`);
+      this.broadcastStatus({
         connected: false,
-        symbol: normalized,
+        symbols: [...this.symbols],
         message: "closed"
       });
+      this.scheduleReconnect();
     });
+  }
 
-    sender.once("destroyed", () => {
-      if (this.sender === sender) {
-        this.unsubscribe();
-      }
-    });
+  scheduleReconnect() {
+    if (!this.shouldReconnect || this.symbols.size === 0 || this.reconnectTimer) {
+      return;
+    }
 
-    return { connected: true, symbol: normalized };
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.ensureSocket();
+    }, this.reconnectDelay);
+  }
+
+  sendSubscription(type, symbol) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.logger.info?.(`[finnhub:ws] ${type} ${symbol}`);
+    this.socket.send(JSON.stringify({ type, symbol }));
   }
 
   handleMessage(rawData) {
@@ -100,17 +167,18 @@ class FinnhubRealtime {
       return;
     }
 
-    if (payload.type !== "trade" || !Array.isArray(payload.data) || !this.sender) {
+    if (payload.type !== "trade" || !Array.isArray(payload.data)) {
       return;
     }
 
     for (const item of payload.data) {
-      if (String(item.s || "").toUpperCase() !== this.symbol) {
+      const symbol = normalizeSymbol(item.s);
+      if (!this.symbols.has(symbol)) {
         continue;
       }
 
-      this.safeSend(this.sender, "finnhub:trade", {
-        symbol: this.symbol,
+      this.broadcast("finnhub:trade", {
+        symbol,
         price: Number(item.p),
         timestamp: Number(item.t),
         volume: Number(item.v ?? 0)
@@ -118,8 +186,20 @@ class FinnhubRealtime {
     }
   }
 
+  broadcastStatus(payload) {
+    this.broadcast("finnhub:status", payload);
+  }
+
+  broadcast(channel, payload) {
+    for (const sender of [...this.senders]) {
+      if (!this.safeSend(sender, channel, payload)) {
+        this.senders.delete(sender);
+      }
+    }
+  }
+
   safeSend(sender, channel, payload) {
-    if (!sender || sender.isDestroyed()) {
+    if (!sender || sender.isDestroyed?.()) {
       return false;
     }
 
@@ -127,9 +207,24 @@ class FinnhubRealtime {
     return true;
   }
 
-  unsubscribe() {
-    if (this.socket && this.symbol && this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ type: "unsubscribe", symbol: this.symbol }));
+  unsubscribe(symbol) {
+    const normalized = normalizeSymbol(symbol);
+    if (normalized) {
+      this.symbols.delete(normalized);
+      this.sendSubscription("unsubscribe", normalized);
+      return { connected: this.connected, symbols: [...this.symbols] };
+    }
+
+    this.symbols.clear();
+    this.closeSocket();
+    return { connected: false, symbols: [] };
+  }
+
+  closeSocket() {
+    this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
 
     if (this.socket) {
@@ -137,8 +232,7 @@ class FinnhubRealtime {
     }
 
     this.socket = null;
-    this.sender = null;
-    this.symbol = null;
+    this.connected = false;
   }
 }
 

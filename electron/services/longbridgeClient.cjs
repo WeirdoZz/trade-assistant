@@ -5,10 +5,11 @@ const { loadDotEnv } = require("./env.cjs");
 
 loadDotEnv(path.join(__dirname, "../.."));
 
-const { Config, OAuth, TradeContext } = require("longbridge");
+const { Config, OAuth, QuoteContext, TradeContext } = require("longbridge");
 
 let configPromise;
 let configReady = false;
+let quoteContextPromise;
 
 function getClientId() {
   return (process.env.LONGBRIDGE_CLIENT_ID ?? "").trim();
@@ -70,6 +71,7 @@ function getLongbridgeConfig(openExternal = null, options = {}) {
 
   if (options.force) {
     configPromise = undefined;
+    quoteContextPromise = undefined;
     configReady = false;
     removeStoredToken();
   }
@@ -117,8 +119,22 @@ async function getLongbridgeTradeContext() {
   return TradeContext.new(config);
 }
 
+async function getLongbridgeQuoteContext() {
+  if (!quoteContextPromise) {
+    quoteContextPromise = getLongbridgeConfig()
+      .then((config) => QuoteContext.new(config))
+      .catch((error) => {
+        quoteContextPromise = undefined;
+        throw error;
+      });
+  }
+
+  return quoteContextPromise;
+}
+
 module.exports = {
   getLongbridgeConfig,
+  getLongbridgeQuoteContext,
   getLongbridgeTradeContext,
   getLongbridgeStatus,
   startLongbridgeOAuth

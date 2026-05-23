@@ -230,7 +230,7 @@ function App() {
     dashboardPromise
       .then((payload: DashboardData) => {
         if (!cancelled) {
-          setData(payload);
+          setData(applyOverviewSnapshot(payload, overviewData));
           setClientState(hasDesktopBridge ? "本地就绪" : "浏览器预览");
         }
       })
@@ -392,6 +392,7 @@ function App() {
     const removeStatusListener = window.tradeAssistant.onFinnhubStatus(setFinnhubStatus);
     const removeTradeListener = window.tradeAssistant.onFinnhubTrade((trade) => {
       setData((current) => mergeRealtimeTrade(current, trade));
+      setOverviewData((current) => mergeOverviewTrade(current, trade));
     });
 
     return () => {
@@ -402,16 +403,10 @@ function App() {
 
   useEffect(() => {
     if (!window.tradeAssistant || activeView !== "research" || researchMode !== "detail") {
-      void window.tradeAssistant?.unsubscribeFinnhub?.();
-      setFinnhubStatus(null);
       return;
     }
 
     void window.tradeAssistant.subscribeFinnhub(symbol);
-
-    return () => {
-      void window.tradeAssistant?.unsubscribeFinnhub?.();
-    };
   }, [activeView, researchMode, symbol]);
 
   const chartOption = useMemo(() => {
@@ -777,6 +772,72 @@ function mergeRealtimeTrade(current: DashboardData | null, trade: FinnhubTrade):
       updatedAt: new Date(trade.timestamp || Date.now()).toISOString()
     },
     prices
+  };
+}
+
+function applyOverviewSnapshot(dashboard: DashboardData, overview: MarketOverviewData | null): DashboardData {
+  const card = overview?.watchlist.find((item) => item.symbol === dashboard.symbol);
+  if (!card) {
+    return dashboard;
+  }
+
+  const previousClose = card.price - card.dayChange.amount || dashboard.quote.previousClose;
+  const prices = dashboard.prices.length
+    ? [
+      ...dashboard.prices.slice(0, -1),
+      {
+        ...dashboard.prices[dashboard.prices.length - 1],
+        close: card.price
+      }
+    ]
+    : dashboard.prices;
+
+  return {
+    ...dashboard,
+    quote: {
+      ...dashboard.quote,
+      name: card.name,
+      price: card.price,
+      changeAmount: card.dayChange.amount,
+      changePercent: card.dayChange.percent,
+      previousClose,
+      updatedAt: card.updatedAt
+    },
+    prices
+  };
+}
+
+function mergeOverviewTrade(current: MarketOverviewData | null, trade: FinnhubTrade): MarketOverviewData | null {
+  if (!current || !Number.isFinite(trade.price)) {
+    return current;
+  }
+
+  const updateCard = (card: MarketCard): MarketCard => {
+    if (card.symbol !== trade.symbol) {
+      return card;
+    }
+
+    const previousClose = card.price - card.dayChange.amount || card.price;
+    const changeAmount = Number((trade.price - previousClose).toFixed(2));
+    const changePercent = previousClose === 0 ? 0 : Number(((changeAmount / previousClose) * 100).toFixed(2));
+    const nextPrice = Number(trade.price.toFixed(2));
+
+    return {
+      ...card,
+      price: nextPrice,
+      dayChange: {
+        amount: changeAmount,
+        percent: changePercent
+      },
+      updatedAt: new Date(trade.timestamp || Date.now()).toISOString(),
+      sparkline: [...card.sparkline.slice(1), nextPrice]
+    };
+  };
+
+  return {
+    ...current,
+    updatedAt: new Date(trade.timestamp || Date.now()).toISOString(),
+    watchlist: current.watchlist.map(updateCard)
   };
 }
 

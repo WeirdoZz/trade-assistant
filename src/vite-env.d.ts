@@ -50,6 +50,7 @@ type DashboardData = {
 type FinnhubStatus = {
   connected: boolean;
   symbol?: string;
+  symbols?: string[];
   message: string;
 };
 
