@@ -34,6 +34,7 @@ type PricePoint = {
 type DashboardData = {
   symbol: string;
   calcInfo?: SecurityCalcInfo | null;
+  ratings?: SecurityRatings | null;
   staticInfo?: SecurityStaticInfo | null;
   quote: {
     name: string;
@@ -56,6 +57,64 @@ type DashboardData = {
   };
 };
 
+type SecurityRatings = {
+  analyst: AnalystRatings | null;
+  institution: InstitutionRating | null;
+};
+
+type AnalystRatings = {
+  industryName: string | null;
+  industryRank: number | null;
+  multiLetter: string | null;
+  multiScore: string | null;
+  multiScoreChange: number | null;
+  scaleName: string | null;
+  styleName: string | null;
+  reportPeriod: string | null;
+  ratingsJson: string | null;
+};
+
+type RatingEvaluate = {
+  buy: number | null;
+  hold: number | null;
+  sell: number | null;
+  over?: number | null;
+  under?: number | null;
+  noOpinion?: number | null;
+  total?: number | null;
+  startDate?: string | null;
+  endDate?: string | null;
+};
+
+type RatingTarget = {
+  averageTarget?: string | null;
+  highestPrice: string | null;
+  lowestPrice: string | null;
+  previousClose?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+};
+
+type InstitutionRating = {
+  latest: {
+    evaluate: RatingEvaluate | null;
+    industryName: string | null;
+    industryRank: number | null;
+    industryTotal: number | null;
+    industryMean: number | null;
+    industryMedian: number | null;
+    target: RatingTarget | null;
+  } | null;
+  summary: {
+    recommend: string | null;
+    change: string | null;
+    currencySymbol: string | null;
+    updatedAt: string | null;
+    evaluate: RatingEvaluate | null;
+    target: RatingTarget | null;
+  } | null;
+};
+
 type SecurityCalcInfo = {
   symbol: string | null;
   lastDone: string | null;
@@ -71,6 +130,7 @@ type SecurityCalcInfo = {
   volumeRatio: string | null;
   peTtmRatio: string | null;
   pbRatio: string | null;
+  eps?: string | null;
   dividendRatioTtm: string | null;
   fiveDayChangeRate: string | null;
   tenDayChangeRate: string | null;
@@ -221,6 +281,7 @@ function buildBrowserFallback(symbol: string): DashboardData {
   return {
     symbol: normalized,
     calcInfo: null,
+    ratings: null,
     staticInfo: {
       symbol: `${normalized}.US`,
       nameCn: null,
@@ -289,12 +350,10 @@ function App() {
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
   const [finnhubStatus, setFinnhubStatus] = useState<FinnhubStatus | null>(null);
-  const [keyMetricsExpanded, setKeyMetricsExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setKeyMetricsExpanded(false);
 
     const hasDesktopBridge = Boolean(window.tradeAssistant);
     const dashboardPromise = hasDesktopBridge
@@ -532,9 +591,9 @@ function App() {
   }, [data]);
   const staticInfo = data?.staticInfo;
   const calcInfo = data?.calcInfo;
-  const headlineMetrics = getHeadlineKeyMetrics(staticInfo, calcInfo);
-  const expandedMetrics = getExpandedKeyMetrics(staticInfo, calcInfo);
-  const performanceMetrics = getPerformanceKeyMetrics(data, calcInfo);
+  const headlineMetrics = getHeadlineKeyMetrics(calcInfo);
+  const tradingActivityMetrics = getTradingActivityMetrics(calcInfo);
+  const financialReportMetrics = getFinancialReportMetrics(staticInfo, calcInfo);
 
   const submitSymbol = (event: React.FormEvent) => {
     event.preventDefault();
@@ -673,17 +732,8 @@ function App() {
             <div className="key-metrics-heading">
               <div>
                 <h1>{data?.symbol ?? symbol} 关键指标</h1>
-                <p>估值、盈利、股本与短期交易强度</p>
+                <p>价格表现、成交活跃度与实时状态</p>
               </div>
-              <button
-                className="collapse-button"
-                type="button"
-                onClick={() => setKeyMetricsExpanded((expanded) => !expanded)}
-                aria-expanded={keyMetricsExpanded}
-              >
-                {keyMetricsExpanded ? "收起" : "展开"}
-                <ChevronDown size={16} className={keyMetricsExpanded ? "expanded" : ""} />
-              </button>
             </div>
             <div className="key-index-grid">
               {headlineMetrics.map((metric) => (
@@ -692,14 +742,6 @@ function App() {
                   <strong>{loading ? "--" : metric.value}</strong>
                 </div>
               ))}
-              {keyMetricsExpanded
-                ? expandedMetrics.map((metric) => (
-                  <div className="key-index-item secondary" key={metric.label}>
-                    <span>{metric.label}</span>
-                    <strong>{loading ? "--" : metric.value}</strong>
-                  </div>
-                ))
-                : null}
             </div>
           </div>
           <div className="hero-side">
@@ -708,58 +750,79 @@ function App() {
               <Metric icon={<TrendingUp size={18} />} label="日内变化" value={loading ? "--" : `${formatSigned(data?.quote.changeAmount ?? 0)} / ${formatSignedPercent(data?.quote.changePercent ?? 0)}`} />
               <Metric icon={<Gauge size={18} />} label="实时连接" value={getRealtimeLabel(finnhubStatus)} />
             </div>
-            {keyMetricsExpanded ? (
-              <div className="performance-strip">
-                {performanceMetrics.map((metric) => (
-                  <div className="performance-item" key={metric.label}>
+            <div className="performance-strip">
+              {tradingActivityMetrics.map((metric) => (
+                <div className="performance-item" key={metric.label}>
+                  <span>{metric.label}</span>
+                  <strong>{loading ? "--" : metric.value}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+                </section>
+
+                <section className="content-grid">
+          <div className="chart-column">
+            <div className="chart-panel">
+              <div className="section-heading">
+                <div>
+                  <span>Price Trend</span>
+                  <h2>近四个月价格走势</h2>
+                </div>
+                <button className="ghost-button">1D <ChevronDown size={16} /></button>
+              </div>
+              <ReactECharts option={chartOption} className="price-chart" notMerge lazyUpdate />
+            </div>
+
+            <section className="financial-report-panel">
+              <div className="section-heading compact">
+                <div>
+                  <span>Financial Report</span>
+                  <h2>财务报告</h2>
+                </div>
+                <Database size={20} />
+              </div>
+              <div className="financial-report-grid">
+                {financialReportMetrics.map((metric) => (
+                  <div className="financial-report-item" key={metric.label}>
                     <span>{metric.label}</span>
                     <strong>{loading ? "--" : metric.value}</strong>
                   </div>
                 ))}
               </div>
-            ) : null}
-          </div>
-                </section>
-
-                <section className="content-grid">
-          <div className="chart-panel">
-            <div className="section-heading">
-              <div>
-                <span>Price Trend</span>
-                <h2>近四个月价格走势</h2>
-              </div>
-              <button className="ghost-button">1D <ChevronDown size={16} /></button>
-            </div>
-            <ReactECharts option={chartOption} className="price-chart" notMerge lazyUpdate />
+            </section>
           </div>
 
-          <aside className="insight-panel">
-            <div className="section-heading compact">
-              <div>
-                <span>AI Analysis</span>
-                <h2>模型研判占位</h2>
+          <div className="insight-column">
+            <aside className="insight-panel">
+              <div className="section-heading compact">
+                <div>
+                  <span>AI Analysis</span>
+                  <h2>模型研判占位</h2>
+                </div>
+                <Bot size={20} />
               </div>
-              <Bot size={20} />
-            </div>
-            <div className="analysis-callout">
-              <Sparkles size={20} />
-              <p>{data?.analysis.summary ?? "等待后端返回分析摘要。"}</p>
-            </div>
-            <div className="zones">
-              <div>
-                <span>计划买入区</span>
-                <strong>{data?.analysis.buyZone ?? "--"}</strong>
+              <div className="analysis-callout">
+                <Sparkles size={20} />
+                <p>{data?.analysis.summary ?? "等待后端返回分析摘要。"}</p>
               </div>
-              <div>
-                <span>计划卖出区</span>
-                <strong>{data?.analysis.sellZone ?? "--"}</strong>
+              <div className="zones">
+                <div>
+                  <span>计划买入区</span>
+                  <strong>{data?.analysis.buyZone ?? "--"}</strong>
+                </div>
+                <div>
+                  <span>计划卖出区</span>
+                  <strong>{data?.analysis.sellZone ?? "--"}</strong>
+                </div>
               </div>
-            </div>
-            <div className="risk-note">
-              <ShieldAlert size={18} />
-              {data?.analysis.risk ?? "接入真实数据后展示风险位。"}
-            </div>
-          </aside>
+              <div className="risk-note">
+                <ShieldAlert size={18} />
+                {data?.analysis.risk ?? "接入真实数据后展示风险位。"}
+              </div>
+            </aside>
+            <RatingsPanel ratings={data?.ratings ?? null} loading={loading} />
+          </div>
                 </section>
 
                 <section className="lower-grid">
@@ -874,6 +937,82 @@ function Panel({
       </div>
       {children}
     </section>
+  );
+}
+
+function RatingsPanel({ ratings, loading }: { ratings?: SecurityRatings | null; loading: boolean }) {
+  const analyst = ratings?.analyst ?? null;
+  const institution = ratings?.institution ?? null;
+  const summary = institution?.summary ?? null;
+  const latest = institution?.latest ?? null;
+  const evaluate = summary?.evaluate ?? latest?.evaluate ?? null;
+  const total = evaluate?.total ?? sumRatingCounts(evaluate);
+  const summaryTarget = summary?.target ?? null;
+  const latestTarget = latest?.target ?? null;
+  const averageTarget = summaryTarget?.averageTarget ?? latestTarget?.averageTarget ?? null;
+  const highestTarget = summaryTarget?.highestPrice ?? latestTarget?.highestPrice ?? null;
+  const lowestTarget = summaryTarget?.lowestPrice ?? latestTarget?.lowestPrice ?? null;
+  const currency = summary?.currencySymbol ?? "";
+
+  return (
+    <aside className="ratings-panel">
+      <div className="section-heading compact">
+        <div>
+          <span>Ratings</span>
+          <h2>分析师与机构评级</h2>
+        </div>
+        <Gauge size={20} />
+      </div>
+      <div className="ratings-grid">
+        <div className="rating-card">
+          <span>分析师评级</span>
+          <strong>{loading ? "--" : analyst?.multiLetter ?? "--"}</strong>
+          <div className="rating-meta">
+            <span>综合分 {loading ? "--" : formatMetricText(analyst?.multiScore)}</span>
+            <span>变化 {loading ? "--" : formatSigned(analyst?.multiScoreChange ?? 0)}</span>
+          </div>
+          <small>{loading ? "--" : analyst?.reportPeriod ?? analyst?.industryName ?? "--"}</small>
+        </div>
+        <div className="rating-card">
+          <span>机构共识</span>
+          <strong>{loading ? "--" : summary?.recommend ?? "--"}</strong>
+          <div className="rating-meta">
+            <span>目标均价 {loading ? "--" : formatCurrencyValue(averageTarget, currency)}</span>
+            <span>最高目标 {loading ? "--" : formatCurrencyValue(highestTarget, currency)}</span>
+            <span>最低目标 {loading ? "--" : formatCurrencyValue(lowestTarget, currency)}</span>
+            <span>更新 {loading ? "--" : formatTimestampDate(summary?.updatedAt)}</span>
+          </div>
+          <small>
+            {loading
+              ? "--"
+              : latest?.industryName
+                ? `${latest.industryName}${latest.industryRank ? ` #${latest.industryRank}` : ""}`
+                : "--"}
+          </small>
+        </div>
+      </div>
+      <div className="rating-bars">
+        {[
+          { label: "买入", value: evaluate?.buy ?? 0, className: "buy" },
+          { label: "持有", value: evaluate?.hold ?? 0, className: "hold" },
+          { label: "卖出", value: evaluate?.sell ?? 0, className: "sell" }
+        ].map((item) => (
+          <div className="rating-bar-row" key={item.label}>
+            <span>{item.label}</span>
+            <div className="rating-bar"><b className={item.className} style={{ width: `${ratingPercent(item.value, total)}%` }} /></div>
+            <strong>{loading ? "--" : item.value}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="target-range">
+        <span>目标价区间</span>
+        <strong>
+          {loading
+            ? "--"
+            : `${formatCurrencyValue(lowestTarget, currency)} - ${formatCurrencyValue(highestTarget, currency)}`}
+        </strong>
+      </div>
+    </aside>
   );
 }
 
@@ -1285,42 +1424,76 @@ function formatMetricCompact(value?: string | number | null) {
   }).format(number);
 }
 
-function getHeadlineKeyMetrics(staticInfo?: SecurityStaticInfo | null, calcInfo?: SecurityCalcInfo | null) {
+function formatCurrencyValue(value?: string | null, currency = "") {
+  if (!value) {
+    return "--";
+  }
+
+  return `${currency}${value}`;
+}
+
+function formatTimestampDate(value?: string | null) {
+  if (!value || value === "0") {
+    return "--";
+  }
+
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    return value;
+  }
+
+  return new Date(number > 1_000_000_000_000 ? number : number * 1000).toLocaleDateString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit"
+  });
+}
+
+function sumRatingCounts(evaluate?: RatingEvaluate | null) {
+  if (!evaluate) {
+    return 0;
+  }
+
+  return (evaluate.buy ?? 0) + (evaluate.hold ?? 0) + (evaluate.sell ?? 0);
+}
+
+function ratingPercent(value: number, total: number) {
+  if (!Number.isFinite(total) || total <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, (value / total) * 100));
+}
+
+function getHeadlineKeyMetrics(calcInfo?: SecurityCalcInfo | null) {
   return [
-    { label: "总市值", value: formatMetricCompact(calcInfo?.totalMarketValue) },
-    { label: "PE TTM", value: formatMetricText(calcInfo?.peTtmRatio) },
-    { label: "PB", value: formatMetricText(calcInfo?.pbRatio) },
-    { label: "EPS TTM", value: formatMetricText(staticInfo?.epsTtm) },
-    { label: "BPS", value: formatMetricText(staticInfo?.bps) },
-    { label: "股息 TTM", value: formatMetricPercent(calcInfo?.dividendRatioTtm ?? staticInfo?.dividendYield) }
+    { label: "年初至今", value: formatMetricPercent(calcInfo?.ytdChangeRate) },
+    { label: "半年", value: formatMetricPercent(calcInfo?.halfYearChangeRate) },
+    { label: "10日", value: formatMetricPercent(calcInfo?.tenDayChangeRate) },
+    { label: "5日", value: formatMetricPercent(calcInfo?.fiveDayChangeRate) },
+    { label: "5分钟", value: formatMetricPercent(calcInfo?.fiveMinutesChangeRate) },
+    { label: "振幅", value: formatMetricPercent(calcInfo?.amplitude) }
   ];
 }
 
-function getExpandedKeyMetrics(staticInfo?: SecurityStaticInfo | null, calcInfo?: SecurityCalcInfo | null) {
+function getTradingActivityMetrics(calcInfo?: SecurityCalcInfo | null) {
   return [
-    { label: "流通股本", value: formatMetricCompact(staticInfo?.circulatingShares) },
-    { label: "总股本", value: formatMetricCompact(staticInfo?.totalShares) },
-    { label: "换手率", value: formatMetricPercent(calcInfo?.turnoverRate) },
-    { label: "量比", value: formatMetricText(calcInfo?.volumeRatio) },
-    { label: "振幅", value: formatMetricPercent(calcInfo?.amplitude) },
-    { label: "年初至今", value: formatMetricPercent(calcInfo?.ytdChangeRate) },
-    { label: "5日", value: formatMetricPercent(calcInfo?.fiveDayChangeRate) },
-    { label: "10日", value: formatMetricPercent(calcInfo?.tenDayChangeRate) },
-    { label: "半年", value: formatMetricPercent(calcInfo?.halfYearChangeRate) },
-    { label: "5分钟", value: formatMetricPercent(calcInfo?.fiveMinutesChangeRate) },
+    { label: "成交量", value: formatMetricCompact(calcInfo?.volume) },
     { label: "成交额", value: formatMetricCompact(calcInfo?.turnover) },
+    { label: "换手率", value: formatMetricPercent(calcInfo?.turnoverRate) },
     { label: "资金流", value: formatMetricCompact(calcInfo?.capitalFlow) }
   ];
 }
 
-function getPerformanceKeyMetrics(data?: DashboardData | null, calcInfo?: SecurityCalcInfo | null) {
+function getFinancialReportMetrics(staticInfo?: SecurityStaticInfo | null, calcInfo?: SecurityCalcInfo | null) {
   return [
-    { label: "日内", value: formatSignedPercent(data?.quote.changePercent ?? 0) },
-    { label: "5分钟", value: formatMetricPercent(calcInfo?.fiveMinutesChangeRate) },
-    { label: "5日", value: formatMetricPercent(calcInfo?.fiveDayChangeRate) },
-    { label: "10日", value: formatMetricPercent(calcInfo?.tenDayChangeRate) },
-    { label: "半年", value: formatMetricPercent(calcInfo?.halfYearChangeRate) },
-    { label: "YTD", value: formatMetricPercent(calcInfo?.ytdChangeRate) }
+    { label: "PE TTM", value: formatMetricText(calcInfo?.peTtmRatio) },
+    { label: "PB", value: formatMetricText(calcInfo?.pbRatio) },
+    { label: "EPS", value: formatMetricText(calcInfo?.eps ?? staticInfo?.epsTtm ?? staticInfo?.eps) },
+    { label: "BPS", value: formatMetricText(staticInfo?.bps) },
+    { label: "股息 TTM", value: formatMetricPercent(calcInfo?.dividendRatioTtm ?? staticInfo?.dividendYield) },
+    { label: "总股本", value: formatMetricCompact(staticInfo?.totalShares) },
+    { label: "流通股本", value: formatMetricCompact(staticInfo?.circulatingShares) },
+    { label: "货币", value: formatMetricText(staticInfo?.currency) }
   ];
 }
 

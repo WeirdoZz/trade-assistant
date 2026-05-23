@@ -3,7 +3,11 @@ const path = require("node:path");
 const https = require("node:https");
 const { Period, AdjustType, TradeSessions, CalcIndex } = require("longbridge");
 const { defaultWatchlist } = require("./watchlist.cjs");
-const { getLongbridgeQuoteContext, getLongbridgeStatus } = require("./longbridgeClient.cjs");
+const {
+  getLongbridgeFundamentalContext,
+  getLongbridgeQuoteContext,
+  getLongbridgeStatus
+} = require("./longbridgeClient.cjs");
 
 loadDotEnv(path.join(__dirname, "../.."));
 
@@ -85,6 +89,7 @@ function buildFallbackDashboard(symbol = "NVDA") {
   return {
     symbol: normalized,
     calcInfo: null,
+    ratings: null,
     staticInfo: {
       symbol: toLongbridgeSymbol(normalized),
       nameEn: `${normalized} Inc.`,
@@ -449,6 +454,7 @@ function normalizeLongbridgeCalcInfo(info) {
     volumeRatio: toText(info.volumeRatio ?? info.volume_ratio),
     peTtmRatio: toText(info.peTtmRatio ?? info.pe_ttm_ratio),
     pbRatio: toText(info.pbRatio ?? info.pb_ratio),
+    eps: toText(info.eps),
     dividendRatioTtm: toText(info.dividendRatioTtm ?? info.dividend_ratio_ttm),
     fiveDayChangeRate: toText(info.fiveDayChangeRate ?? info.five_day_change_rate),
     tenDayChangeRate: toText(info.tenDayChangeRate ?? info.ten_day_change_rate),
@@ -469,6 +475,154 @@ function normalizeLongbridgeCalcResponse(response) {
           : [];
 
   return list.map(normalizeLongbridgeCalcInfo).filter(Boolean);
+}
+
+function unwrapFundamentalData(response) {
+  return response?.data ?? response ?? null;
+}
+
+function normalizeLongbridgeAnalystRatings(response) {
+  const info = unwrapFundamentalData(response);
+  if (!info) {
+    return null;
+  }
+
+  const toText = (value) => (
+    value === undefined || value === null || value === "" ? null : String(value)
+  );
+  const toInteger = (value) => {
+    const number = Number(value);
+    return Number.isInteger(number) ? number : null;
+  };
+
+  return {
+    industryName: toText(info.industryName ?? info.industry_name),
+    industryRank: toInteger(info.industryRank ?? info.industry_rank),
+    multiLetter: toText(info.multiLetter ?? info.multi_letter),
+    multiScore: toText(info.multiScore ?? info.multi_score),
+    multiScoreChange: toInteger(info.multiScoreChange ?? info.multi_score_change),
+    scaleName: toText(info.scaleTxtName ?? info.scale_txt_name),
+    styleName: toText(info.styleTxtName ?? info.style_txt_name),
+    reportPeriod: toText(info.reportPeriodTxt ?? info.report_period_txt),
+    ratingsJson: toText(info.ratingsJson ?? info.ratings_json)
+  };
+}
+
+function normalizeLongbridgeInstitutionRating(response) {
+  const info = unwrapFundamentalData(response);
+  if (!info) {
+    return null;
+  }
+
+  const toText = (value) => (
+    value === undefined || value === null || value === "" ? null : String(value)
+  );
+  const toInteger = (value) => {
+    const number = Number(value);
+    return Number.isInteger(number) ? number : null;
+  };
+  const normalizeEvaluate = (value) => {
+    if (!value) {
+      return null;
+    }
+
+    return {
+      buy: toInteger(value.buy),
+      hold: toInteger(value.hold),
+      sell: toInteger(value.sell),
+      over: toInteger(value.over),
+      under: toInteger(value.under),
+      noOpinion: toInteger(value.noOpinion ?? value.no_opinion),
+      total: toInteger(value.total),
+      startDate: toText(value.startDate ?? value.start_date),
+      endDate: toText(value.endDate ?? value.end_date)
+    };
+  };
+  const normalizeTarget = (value) => {
+    if (!value) {
+      return null;
+    }
+
+    if (typeof value === "string" || typeof value === "number") {
+      return {
+        averageTarget: toText(value),
+        highestPrice: null,
+        lowestPrice: null,
+        previousClose: null,
+        startDate: null,
+        endDate: null
+      };
+    }
+
+    return {
+      averageTarget: toText(value.averageTarget ?? value.average_target),
+      highestPrice: toText(value.highestPrice ?? value.highest_price),
+      lowestPrice: toText(value.lowestPrice ?? value.lowest_price),
+      previousClose: toText(value.prevClose ?? value.prev_close),
+      startDate: toText(value.startDate ?? value.start_date),
+      endDate: toText(value.endDate ?? value.end_date)
+    };
+  };
+
+  return {
+    latest: info.latest ? {
+      evaluate: normalizeEvaluate(info.latest.evaluate),
+      industryName: toText(info.latest.industryName ?? info.latest.industry_name),
+      industryRank: toInteger(info.latest.industryRank ?? info.latest.industry_rank),
+      industryTotal: toInteger(info.latest.industryTotal ?? info.latest.industry_total),
+      industryMean: toInteger(info.latest.industryMean ?? info.latest.industry_mean),
+      industryMedian: toInteger(info.latest.industryMedian ?? info.latest.industry_median),
+      target: normalizeTarget(info.latest.target)
+    } : null,
+    summary: info.summary ? {
+      recommend: toText(info.summary.recommend),
+      change: toText(info.summary.change),
+      currencySymbol: toText(info.summary.ccySymbol ?? info.summary.ccy_symbol),
+      updatedAt: toText(info.summary.updatedAt ?? info.summary.updated_at),
+      evaluate: normalizeEvaluate(info.summary.evaluate),
+      target: normalizeTarget(info.summary.target)
+    } : null
+  };
+}
+
+async function fetchLongbridgeRatings(symbols, options = {}) {
+  const {
+    getStatus = getLongbridgeStatus,
+    getContext = getLongbridgeFundamentalContext
+  } = options;
+  const normalized = [...new Set(symbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean))];
+  if (normalized.length === 0 || process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES === "1") {
+    return new Map();
+  }
+
+  const status = getStatus();
+  if (!status.configured || !status.tokenExists) {
+    return new Map();
+  }
+
+  try {
+    const ctx = await getContext();
+    const entries = await Promise.all(normalized.map(async (symbol) => {
+      const longbridgeSymbol = toLongbridgeSymbol(symbol);
+      const [analystResponse, institutionResponse] = await Promise.all([
+        ctx.ratings(longbridgeSymbol),
+        ctx.institutionRating(longbridgeSymbol)
+      ]);
+
+      return [
+        symbol,
+        {
+          analyst: normalizeLongbridgeAnalystRatings(analystResponse),
+          institution: normalizeLongbridgeInstitutionRating(institutionResponse)
+        }
+      ];
+    }));
+
+    return new Map(entries);
+  } catch (error) {
+    console.warn("[longbridge:ratings] unavailable", formatLongbridgeErrorDetail(error));
+    return new Map();
+  }
 }
 
 async function fetchLongbridgeStaticInfo(symbols, options = {}) {
@@ -765,20 +919,25 @@ function formatLongbridgeErrorDetail(error) {
 }
 
 async function getDashboard(symbol = "NVDA") {
-  const [quotes, candlesBySymbol, staticInfoBySymbol, calcInfoBySymbol] = await Promise.all([
+  const [quotes, candlesBySymbol, staticInfoBySymbol, calcInfoBySymbol, ratingsBySymbol] = await Promise.all([
     fetchLongbridgeQuotes([symbol]),
     fetchLongbridgeCandlesticks([symbol]),
     fetchLongbridgeStaticInfo([symbol]),
-    fetchLongbridgeCalcIndexes([symbol])
+    fetchLongbridgeCalcIndexes([symbol]),
+    fetchLongbridgeRatings([symbol])
   ]);
   const normalized = String(symbol || "NVDA").trim().toUpperCase();
   const quote = quotes[0];
   const prices = candlesBySymbol.get(normalized) ?? [];
   const staticInfo = staticInfoBySymbol.get(normalized) ?? null;
   const calcInfo = calcInfoBySymbol.get(normalized) ?? null;
+  const ratings = ratingsBySymbol.get(normalized) ?? null;
 
-  if (quote || prices.length > 0 || staticInfo || calcInfo) {
-    return buildDashboardFromLongbridgeQuote(symbol, quote, prices, staticInfo, calcInfo);
+  if (quote || prices.length > 0 || staticInfo || calcInfo || ratings) {
+    return {
+      ...buildDashboardFromLongbridgeQuote(symbol, quote, prices, staticInfo, calcInfo),
+      ratings
+    };
   }
 
   return buildFallbackDashboard(symbol);
@@ -968,6 +1127,7 @@ module.exports = {
   candlesticksToPrices,
   fetchLongbridgeCalcIndexes,
   fetchLongbridgeCandlesticks,
+  fetchLongbridgeRatings,
   fetchLongbridgeStaticInfo,
   fetchLongbridgeQuotes,
   getDashboard,

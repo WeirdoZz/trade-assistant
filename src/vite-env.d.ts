@@ -24,6 +24,7 @@ type BrokerId = "longbridge";
 type DashboardData = {
   symbol: string;
   calcInfo?: SecurityCalcInfo | null;
+  ratings?: SecurityRatings | null;
   staticInfo?: SecurityStaticInfo | null;
   quote: {
     name: string;
@@ -50,6 +51,64 @@ type DashboardData = {
   };
 };
 
+type SecurityRatings = {
+  analyst: AnalystRatings | null;
+  institution: InstitutionRating | null;
+};
+
+type AnalystRatings = {
+  industryName: string | null;
+  industryRank: number | null;
+  multiLetter: string | null;
+  multiScore: string | null;
+  multiScoreChange: number | null;
+  scaleName: string | null;
+  styleName: string | null;
+  reportPeriod: string | null;
+  ratingsJson: string | null;
+};
+
+type RatingEvaluate = {
+  buy: number | null;
+  hold: number | null;
+  sell: number | null;
+  over?: number | null;
+  under?: number | null;
+  noOpinion?: number | null;
+  total?: number | null;
+  startDate?: string | null;
+  endDate?: string | null;
+};
+
+type RatingTarget = {
+  averageTarget?: string | null;
+  highestPrice: string | null;
+  lowestPrice: string | null;
+  previousClose?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+};
+
+type InstitutionRating = {
+  latest: {
+    evaluate: RatingEvaluate | null;
+    industryName: string | null;
+    industryRank: number | null;
+    industryTotal: number | null;
+    industryMean: number | null;
+    industryMedian: number | null;
+    target: RatingTarget | null;
+  } | null;
+  summary: {
+    recommend: string | null;
+    change: string | null;
+    currencySymbol: string | null;
+    updatedAt: string | null;
+    evaluate: RatingEvaluate | null;
+    target: RatingTarget | null;
+  } | null;
+};
+
 type SecurityCalcInfo = {
   symbol: string | null;
   lastDone: string | null;
@@ -65,6 +124,7 @@ type SecurityCalcInfo = {
   volumeRatio: string | null;
   peTtmRatio: string | null;
   pbRatio: string | null;
+  eps?: string | null;
   dividendRatioTtm: string | null;
   fiveDayChangeRate: string | null;
   tenDayChangeRate: string | null;

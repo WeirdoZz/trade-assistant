@@ -7,6 +7,7 @@ const {
   candlesticksToPrices,
   fetchLongbridgeCalcIndexes,
   fetchLongbridgeCandlesticks,
+  fetchLongbridgeRatings,
   fetchLongbridgeStaticInfo,
   getFinnhubApiKey,
   getMarketOverview,
@@ -305,6 +306,7 @@ test("longbridge dashboard exposes calc indexes beside static info", () => {
     total_market_value: "2134501670280.00",
     pe_ttm_ratio: "21.26",
     pb_ratio: "31.71",
+    eps: "6.12",
     dividend_ratio_ttm: "0.64",
     ytd_change_rate: "-25.63"
   });
@@ -313,7 +315,102 @@ test("longbridge dashboard exposes calc indexes beside static info", () => {
   assert.equal(dashboard.calcInfo.totalMarketValue, "2134501670280.00");
   assert.equal(dashboard.calcInfo.peTtmRatio, "21.26");
   assert.equal(dashboard.calcInfo.pbRatio, "31.71");
+  assert.equal(dashboard.calcInfo.eps, "6.12");
   assert.equal(dashboard.staticInfo.epsTtm, "6.0771");
+});
+
+test("longbridge ratings fetch maps analyst and institution snapshots by plain symbol", async () => {
+  const originalDisableLongbridge = process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+  delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+
+  try {
+    const result = await fetchLongbridgeRatings(["TSLA"], {
+      getStatus: () => ({ configured: true, tokenExists: true }),
+      getContext: async () => ({
+        ratings: async (symbol) => {
+          assert.equal(symbol, "TSLA.US");
+          return {
+            industry_name: "Automobiles",
+            industry_rank: 2,
+            multi_letter: "B",
+            multi_score: "0.32",
+            multi_score_change: -1,
+            scale_txt_name: "Large",
+            style_txt_name: "Blend",
+            report_period_txt: "Rating based on Fiscal Year 2026 s.a."
+          };
+        },
+        institutionRating: async (symbol) => {
+          assert.equal(symbol, "TSLA.US");
+          return {
+            latest: {
+              evaluate: { buy: 18, hold: 17, sell: 4, total: 51 },
+              industry_name: "Automobiles",
+              industry_rank: 1,
+              industry_total: 30,
+              target: {
+                highest_price: "600.000",
+                lowest_price: "123.000",
+                prev_close: "428.35"
+              }
+            },
+            summary: {
+              recommend: "Buy",
+              ccy_symbol: "$",
+              updated_at: "1778198400",
+              evaluate: { buy: 18, hold: 17, sell: 4 },
+              target: {
+                average_target: "350.00",
+                highest_price: "600.000",
+                lowest_price: "123.000"
+              }
+            }
+          };
+        }
+      })
+    });
+
+    assert.equal(result.get("TSLA").analyst.multiLetter, "B");
+    assert.equal(result.get("TSLA").analyst.multiScoreChange, -1);
+    assert.equal(result.get("TSLA").institution.summary.recommend, "Buy");
+    assert.equal(result.get("TSLA").institution.summary.target.averageTarget, "350.00");
+    assert.equal(result.get("TSLA").institution.latest.evaluate.total, 51);
+  } finally {
+    if (originalDisableLongbridge === undefined) {
+      delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+    } else {
+      process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES = originalDisableLongbridge;
+    }
+  }
+});
+
+test("longbridge institution rating accepts summary target as a plain string", async () => {
+  const originalDisableLongbridge = process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+  delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+
+  try {
+    const result = await fetchLongbridgeRatings(["AAPL"], {
+      getStatus: () => ({ configured: true, tokenExists: true }),
+      getContext: async () => ({
+        ratings: async () => ({}),
+        institutionRating: async () => ({
+          summary: {
+            recommend: "Buy",
+            ccy_symbol: "$",
+            target: "350.00"
+          }
+        })
+      })
+    });
+
+    assert.equal(result.get("AAPL").institution.summary.target.averageTarget, "350.00");
+  } finally {
+    if (originalDisableLongbridge === undefined) {
+      delete process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES;
+    } else {
+      process.env.TRADE_ASSISTANT_DISABLE_LONGBRIDGE_QUOTES = originalDisableLongbridge;
+    }
+  }
 });
 
 test("watchlist card uses longbridge daily candles for sparkline and performance", () => {
