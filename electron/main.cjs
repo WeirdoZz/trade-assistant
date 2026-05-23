@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("node:path");
-const { getDashboard } = require("./services/marketData.cjs");
+const { FinnhubRealtime } = require("./services/finnhubRealtime.cjs");
+const { getDashboard, getMarketOverview } = require("./services/marketData.cjs");
 const { getPositions } = require("./services/positions.cjs");
 const {
   getLongbridgeStatus,
@@ -8,6 +9,7 @@ const {
 } = require("./services/longbridgeClient.cjs");
 
 const isDev = !app.isPackaged;
+const finnhubRealtime = new FinnhubRealtime();
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -40,6 +42,12 @@ function createWindow() {
 
 function registerIpcHandlers() {
   ipcMain.handle("dashboard:get", (_event, symbol) => getDashboard(symbol));
+  ipcMain.handle("market-overview:get", () => getMarketOverview());
+  ipcMain.handle("finnhub:subscribe", (event, symbol) => finnhubRealtime.subscribe(event.sender, symbol));
+  ipcMain.handle("finnhub:unsubscribe", () => {
+    finnhubRealtime.unsubscribe();
+    return { connected: false };
+  });
   ipcMain.handle("positions:get", (_event, broker) => getPositions(broker));
   ipcMain.handle("longbridge:status", () => getLongbridgeStatus());
   ipcMain.handle("longbridge:oauth:start", (_event, options) => (

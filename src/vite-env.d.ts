@@ -4,6 +4,11 @@ interface Window {
   tradeAssistant?: {
     platform: string;
     getDashboard: (symbol: string) => Promise<DashboardData>;
+    getMarketOverview: () => Promise<MarketOverviewData>;
+    subscribeFinnhub: (symbol: string) => Promise<FinnhubStatus>;
+    unsubscribeFinnhub: () => Promise<FinnhubStatus>;
+    onFinnhubStatus: (handler: (status: FinnhubStatus) => void) => () => void;
+    onFinnhubTrade: (handler: (trade: FinnhubTrade) => void) => () => void;
     getPositions: (broker: BrokerId) => Promise<PositionsResponse>;
     getLongbridgeStatus: () => Promise<LongbridgeStatus>;
     startLongbridgeOAuth: (options?: { force?: boolean }) => Promise<LongbridgeStatus>;
@@ -17,7 +22,9 @@ type DashboardData = {
   quote: {
     name: string;
     price: number;
+    changeAmount: number;
     changePercent: number;
+    previousClose: number;
     market: string;
     updatedAt: string;
   };
@@ -35,6 +42,46 @@ type DashboardData = {
     risk: string;
     summary: string;
   };
+};
+
+type FinnhubStatus = {
+  connected: boolean;
+  symbol?: string;
+  message: string;
+};
+
+type FinnhubTrade = {
+  symbol: string;
+  price: number;
+  timestamp: number;
+  volume: number;
+};
+
+type PeriodReturn = {
+  amount: number;
+  percent: number;
+};
+
+type MarketCard = {
+  symbol: string;
+  name: string;
+  kind: "index" | "stock" | "macro";
+  price: number;
+  dayChange: PeriodReturn;
+  performance: {
+    "5d": PeriodReturn;
+    "10d": PeriodReturn;
+    "15d": PeriodReturn;
+  };
+  updatedAt: string;
+  sparkline: number[];
+};
+
+type MarketOverviewData = {
+  updatedAt: string;
+  indexes: MarketCard[];
+  watchlist: MarketCard[];
+  macro: MarketCard[];
 };
 
 type LongbridgeStatus = {

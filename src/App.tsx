@@ -7,6 +7,7 @@ import {
   BrainCircuit,
   CandlestickChart,
   ChevronDown,
+  ChevronLeft,
   CircleDollarSign,
   Database,
   Gauge,
@@ -33,7 +34,9 @@ type DashboardData = {
   quote: {
     name: string;
     price: number;
+    changeAmount: number;
     changePercent: number;
+    previousClose: number;
     market: string;
     updatedAt: string;
   };
@@ -50,6 +53,7 @@ type DashboardData = {
 };
 
 type ViewId = "research" | "positions";
+type ResearchMode = "overview" | "detail";
 
 const watchlist = [
   { symbol: "NVDA", label: "NVIDIA", change: "+2.84%", state: "强势突破" },
@@ -63,6 +67,64 @@ const optionFlow = [
   { strike: "Put 120", expiry: "06/21", premium: "$2.1M", bias: "对冲" },
   { strike: "Call 155", expiry: "07/19", premium: "$5.7M", bias: "追高" }
 ];
+
+function buildOverviewCard(symbol: string, name: string, kind: MarketCard["kind"], base: number): MarketCard {
+  const normalized = symbol.trim().toUpperCase();
+  const start = new Date();
+  start.setDate(start.getDate() - 30);
+  const sparkline = Array.from({ length: 16 }, (_, index) => (
+    Number((base + Math.sin((index + normalized.length) / 2) * base * 0.018 + index * base * 0.004).toFixed(2))
+  ));
+  const last = sparkline[sparkline.length - 1];
+
+  const changeFor = (period: 1 | 5 | 10 | 15): PeriodReturn => {
+    const previous = sparkline[Math.max(0, sparkline.length - 1 - period)] ?? last;
+    const amount = Number((last - previous).toFixed(2));
+    return {
+      amount,
+      percent: previous === 0 ? 0 : Number(((amount / previous) * 100).toFixed(2))
+    };
+  };
+
+  return {
+    symbol: normalized,
+    name,
+    kind,
+    price: last,
+    dayChange: changeFor(1),
+    performance: {
+      "5d": changeFor(5),
+      "10d": changeFor(10),
+      "15d": changeFor(15)
+    },
+    updatedAt: new Date().toISOString(),
+    sparkline
+  };
+}
+
+function buildBrowserFallbackOverview(): MarketOverviewData {
+  return {
+    updatedAt: new Date().toISOString(),
+    indexes: [
+      buildOverviewCard("IXIC", "NASDAQ Composite", "index", 18940),
+      buildOverviewCard("SPX", "S&P 500", "index", 5824),
+      buildOverviewCard("DJI", "Dow Jones", "index", 42112)
+    ],
+    watchlist: [
+      buildOverviewCard("NVDA", "NVIDIA", "stock", 213),
+      buildOverviewCard("MSFT", "Microsoft", "stock", 487),
+      buildOverviewCard("TSLA", "Tesla", "stock", 178),
+      buildOverviewCard("AMD", "AMD", "stock", 163),
+      buildOverviewCard("AAPL", "Apple", "stock", 198),
+      buildOverviewCard("META", "Meta Platforms", "stock", 642)
+    ],
+    macro: [
+      buildOverviewCard("XAUUSD", "Gold Spot", "macro", 2375),
+      buildOverviewCard("WTI", "WTI Crude Oil", "macro", 78),
+      buildOverviewCard("DXY", "US Dollar Index", "macro", 104)
+    ]
+  };
+}
 
 function buildBrowserFallback(symbol: string): DashboardData {
   const normalized = symbol.trim().toUpperCase() || "NVDA";
@@ -78,13 +140,16 @@ function buildBrowserFallback(symbol: string): DashboardData {
     };
   });
   const lastClose = prices[prices.length - 1].close;
+  const previousClose = prices[prices.length - 2].close;
 
   return {
     symbol: normalized,
     quote: {
       name: `${normalized} Inc.`,
       price: lastClose,
+      changeAmount: Number((lastClose - previousClose).toFixed(2)),
       changePercent: 1.26,
+      previousClose,
       market: "US",
       updatedAt: new Date().toISOString().slice(0, 10)
     },
@@ -110,30 +175,37 @@ function buildBrowserFallback(symbol: string): DashboardData {
 
 function App() {
   const [activeView, setActiveView] = useState<ViewId>("research");
+  const [researchMode, setResearchMode] = useState<ResearchMode>("overview");
   const [broker, setBroker] = useState<BrokerId>("longbridge");
   const [symbol, setSymbol] = useState("NVDA");
   const [query, setQuery] = useState("NVDA");
   const [data, setData] = useState<DashboardData | null>(null);
+  const [overviewData, setOverviewData] = useState<MarketOverviewData | null>(null);
   const [positionsData, setPositionsData] = useState<PositionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [overviewLoading, setOverviewLoading] = useState(true);
   const [positionsLoading, setPositionsLoading] = useState(false);
   const [positionsError, setPositionsError] = useState<string | null>(null);
-  const [clientState, setClientState] = useState<"加载中" | "本地就绪" | "不可用">("加载中");
+  const [clientState, setClientState] = useState<"加载中" | "本地就绪" | "浏览器预览" | "不可用">("加载中");
   const [longbridgeStatus, setLongbridgeStatus] = useState<LongbridgeStatus | null>(null);
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
+  const [finnhubStatus, setFinnhubStatus] = useState<FinnhubStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
 
-    const dashboardPromise = window.tradeAssistant?.getDashboard(symbol) ?? Promise.resolve(buildBrowserFallback(symbol));
+    const hasDesktopBridge = Boolean(window.tradeAssistant);
+    const dashboardPromise = hasDesktopBridge
+      ? window.tradeAssistant!.getDashboard(symbol)
+      : Promise.resolve(buildBrowserFallback(symbol));
 
     dashboardPromise
       .then((payload: DashboardData) => {
         if (!cancelled) {
           setData(payload);
-          setClientState("本地就绪");
+          setClientState(hasDesktopBridge ? "本地就绪" : "浏览器预览");
         }
       })
       .catch(() => {
@@ -151,6 +223,39 @@ function App() {
       cancelled = true;
     };
   }, [symbol]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setOverviewLoading(true);
+
+    const hasDesktopBridge = Boolean(window.tradeAssistant);
+    const overviewPromise = hasDesktopBridge
+      ? window.tradeAssistant!.getMarketOverview()
+      : Promise.resolve(buildBrowserFallbackOverview());
+
+    overviewPromise
+      .then((payload: MarketOverviewData) => {
+        if (!cancelled) {
+          setOverviewData(payload);
+          setClientState(hasDesktopBridge ? "本地就绪" : "浏览器预览");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOverviewData(buildBrowserFallbackOverview());
+          setClientState("不可用");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setOverviewLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!window.tradeAssistant) {
@@ -218,6 +323,36 @@ function App() {
     }
   }, [activeView, broker]);
 
+  useEffect(() => {
+    if (!window.tradeAssistant) {
+      return;
+    }
+
+    const removeStatusListener = window.tradeAssistant.onFinnhubStatus(setFinnhubStatus);
+    const removeTradeListener = window.tradeAssistant.onFinnhubTrade((trade) => {
+      setData((current) => mergeRealtimeTrade(current, trade));
+    });
+
+    return () => {
+      removeStatusListener();
+      removeTradeListener();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.tradeAssistant || activeView !== "research" || researchMode !== "detail") {
+      void window.tradeAssistant?.unsubscribeFinnhub?.();
+      setFinnhubStatus(null);
+      return;
+    }
+
+    void window.tradeAssistant.subscribeFinnhub(symbol);
+
+    return () => {
+      void window.tradeAssistant?.unsubscribeFinnhub?.();
+    };
+  }, [activeView, researchMode, symbol]);
+
   const chartOption = useMemo(() => {
     const prices = data?.prices ?? [];
     return {
@@ -271,7 +406,14 @@ function App() {
     const normalized = query.trim().toUpperCase();
     if (normalized) {
       setSymbol(normalized);
+      setResearchMode("detail");
     }
+  };
+
+  const openResearchDetail = (nextSymbol: string) => {
+    setQuery(nextSymbol);
+    setSymbol(nextSymbol);
+    setResearchMode("detail");
   };
 
   return (
@@ -345,20 +487,32 @@ function App() {
               </div>
             </header>
 
-            <section className="hero-band">
+            {researchMode === "overview" ? (
+              <MarketOverview
+                data={overviewData}
+                loading={overviewLoading}
+                onOpenDetail={openResearchDetail}
+              />
+            ) : (
+              <>
+                <button className="back-button" onClick={() => setResearchMode("overview")}>
+                  <ChevronLeft size={16} /> 返回市场总览
+                </button>
+
+                <section className="hero-band">
           <div>
-            <span className="eyebrow">Longbridge-ready Research Console</span>
+            <span className="eyebrow">Finnhub Live Research Console</span>
             <h1>{data?.symbol ?? symbol} 智能交易研究台</h1>
-            <p>桌面端本地聚合近月趋势、新闻情绪、期权流、技术信号与大模型分析，下一步会由 Electron 主进程直连长桥 API。</p>
+            <p>先用 Finnhub REST 补齐历史 K 线与当前快照，再用单连接 WebSocket 接力实时成交价。</p>
           </div>
           <div className="hero-metrics">
-            <Metric icon={<CircleDollarSign size={18} />} label="最新价" value={loading ? "--" : `$${data?.quote.price}`} />
-            <Metric icon={<TrendingUp size={18} />} label="日内变化" value={loading ? "--" : `${data?.quote.changePercent}%`} />
-            <Metric icon={<Gauge size={18} />} label="策略倾向" value={data?.analysis.stance ?? "--"} />
+            <Metric icon={<CircleDollarSign size={18} />} label="最新价" value={loading ? "--" : `$${data?.quote.price.toFixed(2)}`} />
+            <Metric icon={<TrendingUp size={18} />} label="日内变化" value={loading ? "--" : `${formatSigned(data?.quote.changeAmount ?? 0)} / ${formatSignedPercent(data?.quote.changePercent ?? 0)}`} />
+            <Metric icon={<Gauge size={18} />} label="实时连接" value={getRealtimeLabel(finnhubStatus)} />
           </div>
-            </section>
+                </section>
 
-            <section className="content-grid">
+                <section className="content-grid">
           <div className="chart-panel">
             <div className="section-heading">
               <div>
@@ -397,9 +551,9 @@ function App() {
               {data?.analysis.risk ?? "接入真实数据后展示风险位。"}
             </div>
           </aside>
-            </section>
+                </section>
 
-            <section className="lower-grid">
+                <section className="lower-grid">
           <Panel title="信号雷达" subtitle="Signal Radar" icon={<Activity size={18} />}>
             <div className="signal-list">
               {(data?.signals ?? []).map((signal) => (
@@ -446,8 +600,7 @@ function App() {
             <div className="watch-list">
               {watchlist.map((item) => (
                 <button className="watch-item" key={item.symbol} onClick={() => {
-                  setQuery(item.symbol);
-                  setSymbol(item.symbol);
+                  openResearchDetail(item.symbol);
                 }}>
                   <div>
                     <strong>{item.symbol}</strong>
@@ -461,7 +614,9 @@ function App() {
               ))}
             </div>
           </Panel>
-            </section>
+                </section>
+              </>
+            )}
           </>
         ) : (
           <PositionsView
@@ -511,6 +666,224 @@ function Panel({
       {children}
     </section>
   );
+}
+
+function mergeRealtimeTrade(current: DashboardData | null, trade: FinnhubTrade): DashboardData | null {
+  if (!current || current.symbol !== trade.symbol || !Number.isFinite(trade.price)) {
+    return current;
+  }
+
+  const previousClose = current.quote.previousClose || current.quote.price;
+  const changeAmount = Number((trade.price - previousClose).toFixed(2));
+  const changePercent = previousClose === 0 ? 0 : Number(((changeAmount / previousClose) * 100).toFixed(2));
+  const tradeDate = new Date(trade.timestamp || Date.now()).toISOString().slice(0, 10);
+  const lastPoint = current.prices[current.prices.length - 1];
+  const prices = [...current.prices];
+
+  if (lastPoint?.date === tradeDate) {
+    prices[prices.length - 1] = {
+      ...lastPoint,
+      close: Number(trade.price.toFixed(2)),
+      volume: trade.volume || lastPoint.volume
+    };
+  } else {
+    prices.push({
+      date: tradeDate,
+      close: Number(trade.price.toFixed(2)),
+      volume: trade.volume
+    });
+  }
+
+  return {
+    ...current,
+    quote: {
+      ...current.quote,
+      price: Number(trade.price.toFixed(2)),
+      changeAmount,
+      changePercent,
+      updatedAt: new Date(trade.timestamp || Date.now()).toISOString()
+    },
+    prices
+  };
+}
+
+function MarketOverview({
+  data,
+  loading,
+  onOpenDetail
+}: {
+  data: MarketOverviewData | null;
+  loading: boolean;
+  onOpenDetail: (symbol: string) => void;
+}) {
+  const indexes = data?.indexes ?? [];
+  const watchCards = data?.watchlist ?? [];
+  const macro = data?.macro ?? [];
+
+  return (
+    <>
+      <section className="overview-hero">
+        <div>
+          <span className="eyebrow">Market Overview</span>
+          <h1>市场研究总览</h1>
+          <p>先看三大指数的实时波动，再扫自选关注股票。点击任意股票卡片进入详情研究。</p>
+        </div>
+        <div className="overview-status">
+          <RefreshCw size={18} />
+          <span>{loading ? "行情加载中" : `更新 ${formatTime(data?.updatedAt)}`}</span>
+        </div>
+      </section>
+
+      <section className="overview-section">
+        <div className="section-heading">
+          <div>
+            <span>Major Indexes</span>
+            <h2>三大指数</h2>
+          </div>
+        </div>
+        <div className="market-card-grid indexes">
+          {indexes.map((card) => (
+            <MarketSummaryCard card={card} key={card.symbol} onOpenDetail={onOpenDetail} />
+          ))}
+        </div>
+      </section>
+
+      <section className="overview-section">
+        <div className="section-heading">
+          <div>
+            <span>Watchlist</span>
+            <h2>我的关注</h2>
+          </div>
+          <button className="ghost-button">管理自选</button>
+        </div>
+        <div className="market-card-grid watch">
+          {watchCards.map((card) => (
+            <MarketSummaryCard card={card} key={card.symbol} onOpenDetail={onOpenDetail} />
+          ))}
+        </div>
+      </section>
+
+      <section className="macro-dock" aria-label="宏观价格">
+        {macro.map((card) => (
+          <button className="macro-tile" key={card.symbol} onClick={() => onOpenDetail(card.symbol)}>
+            <span>{card.name}</span>
+            <strong>{formatPrice(card)}</strong>
+            <ChangeText change={card.dayChange} />
+          </button>
+        ))}
+      </section>
+    </>
+  );
+}
+
+function MarketSummaryCard({
+  card,
+  onOpenDetail
+}: {
+  card: MarketCard;
+  onOpenDetail: (symbol: string) => void;
+}) {
+  return (
+    <button className={`market-summary-card ${card.dayChange.percent >= 0 ? "positive" : "negative"}`} onClick={() => onOpenDetail(card.symbol)}>
+      <div className="market-card-head">
+        <div>
+          <strong>{card.symbol}</strong>
+          <span>{card.name}</span>
+        </div>
+        <ChangeText change={card.dayChange} />
+      </div>
+      <div className="market-price-row">
+        <b>{formatPrice(card)}</b>
+        <span>今日 {formatSigned(card.dayChange.amount)} / {formatSignedPercent(card.dayChange.percent)}</span>
+      </div>
+      <Sparkline values={card.sparkline} positive={card.dayChange.percent >= 0} />
+      <div className="period-grid">
+        <PeriodCell label="5日" value={card.performance["5d"]} />
+        <PeriodCell label="10日" value={card.performance["10d"]} />
+        <PeriodCell label="15日" value={card.performance["15d"]} />
+      </div>
+    </button>
+  );
+}
+
+function PeriodCell({ label, value }: { label: string; value: PeriodReturn }) {
+  return (
+    <div className={value.percent >= 0 ? "period-cell positive" : "period-cell negative"}>
+      <span>{label}</span>
+      <strong>{formatSigned(value.amount)}</strong>
+      <b>{formatSignedPercent(value.percent)}</b>
+    </div>
+  );
+}
+
+function ChangeText({ change }: { change: PeriodReturn }) {
+  return (
+    <span className={`change-text ${change.percent >= 0 ? "positive" : "negative"}`}>
+      {formatSigned(change.amount)} / {formatSignedPercent(change.percent)}
+    </span>
+  );
+}
+
+function Sparkline({ values, positive }: { values: number[]; positive: boolean }) {
+  if (values.length < 2) {
+    return <div className="sparkline" />;
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const points = values.map((value, index) => {
+    const x = (index / (values.length - 1)) * 100;
+    const y = 42 - ((value - min) / range) * 34;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+
+  return (
+    <svg className="sparkline" viewBox="0 0 100 48" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={points} fill="none" stroke={positive ? "#3ddc97" : "#ff8b7f"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function formatPrice(card: MarketCard) {
+  if (card.kind === "index") {
+    return card.price.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
+  return `$${card.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatSigned(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatSignedPercent(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function formatTime(value?: string) {
+  if (!value) {
+    return "--";
+  }
+
+  return new Date(value).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function getRealtimeLabel(status: FinnhubStatus | null) {
+  if (!window.tradeAssistant) {
+    return "Mock";
+  }
+
+  if (!status) {
+    return "连接中";
+  }
+
+  return status.connected ? "Finnhub Live" : "无法获取";
 }
 
 export default App;
