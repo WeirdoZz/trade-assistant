@@ -854,7 +854,6 @@ function MarketOverview({
   onAddWatchlist: (item: WatchlistItem) => Promise<void>;
   symbols: SymbolSearchResult[];
 }) {
-  const indexes = data?.indexes ?? [];
   const watchCards = data?.watchlist ?? [];
   const watchSymbols = useMemo(() => new Set(watchCards.map((card) => card.symbol)), [watchCards]);
 
@@ -864,25 +863,10 @@ function MarketOverview({
         <div>
           <span className="eyebrow">Market Overview</span>
           <h1>市场研究总览</h1>
-          <p>先看三大指数的实时波动，再扫自选关注股票。点击任意股票卡片进入详情研究。</p>
         </div>
         <div className="overview-status">
           <RefreshCw size={18} />
           <span>{loading ? "行情加载中" : `更新 ${formatTime(data?.updatedAt)}`}</span>
-        </div>
-      </section>
-
-      <section className="overview-section">
-        <div className="section-heading">
-          <div>
-            <span>Major Indexes</span>
-            <h2>三大指数</h2>
-          </div>
-        </div>
-        <div className="market-card-grid indexes">
-          {indexes.map((card) => (
-            <MarketSummaryCard card={card} key={card.symbol} onOpenDetail={onOpenDetail} />
-          ))}
         </div>
       </section>
 

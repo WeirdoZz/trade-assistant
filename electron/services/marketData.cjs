@@ -708,12 +708,6 @@ function toStockDefinition(item) {
 }
 
 async function getMarketOverview(watchlistItems = defaultWatchlist) {
-  const indexDefinitions = [
-    { symbol: "IXIC", name: "Nasdaq Composite", kind: "index", base: 18940 },
-    { symbol: "DJI", name: "Dow Jones Industrial Average", kind: "index", base: 42112 },
-    { symbol: "SPX", name: "S&P 500", kind: "index", base: 5824 }
-  ];
-
   const watchlistDefinitions = watchlistItems
     .map(toStockDefinition)
     .filter((item) => item.symbol);
@@ -727,14 +721,13 @@ async function getMarketOverview(watchlistItems = defaultWatchlist) {
     fromLongbridgeSymbol(quote.symbol),
     quoteFieldsFromLongbridgeQuote(quote)
   ]));
-  const indexes = indexDefinitions.map(makeMarketCard);
   const watchlist = watchlistDefinitions.map((definition) => (
     makeMarketCard(definition, quoteBySymbol.get(definition.symbol), candlesBySymbol.get(definition.symbol))
   ));
 
   return {
     updatedAt: new Date().toISOString(),
-    indexes,
+    indexes: [],
     watchlist,
     macro: []
   };

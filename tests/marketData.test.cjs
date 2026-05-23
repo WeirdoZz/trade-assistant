@@ -57,15 +57,10 @@ async function withoutFinnhubKey(run) {
   }
 }
 
-test("market overview exposes static indexes and one watchlist card", async () => {
+test("market overview excludes unavailable static indexes and exposes one watchlist card", async () => {
   const overview = await withoutFinnhubKey(() => getMarketOverview());
 
-  assert.equal(overview.indexes.length, 3);
-  assert.deepEqual(overview.indexes.map((card) => card.name), [
-    "Nasdaq Composite",
-    "Dow Jones Industrial Average",
-    "S&P 500"
-  ]);
+  assert.equal(overview.indexes.length, 0);
   assert.deepEqual(overview.watchlist.map((card) => card.symbol), ["NVDA"]);
   assert.equal(overview.macro.length, 0);
 
