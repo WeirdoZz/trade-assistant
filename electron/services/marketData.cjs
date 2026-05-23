@@ -1,6 +1,7 @@
 const { loadDotEnv } = require("./env.cjs");
 const path = require("node:path");
-const finnhub = require("finnhub");
+const https = require("node:https");
+const { defaultWatchlist } = require("./watchlist.cjs");
 
 loadDotEnv(path.join(__dirname, "../.."));
 
@@ -27,7 +28,7 @@ function getFinnhubApiKey() {
 }
 
 function getFinnhubClient(apiKey = getFinnhubApiKey()) {
-  return apiKey ? new finnhub.DefaultApi(apiKey) : null;
+  return apiKey ? { apiKey } : null;
 }
 
 function buildFallbackDashboard(symbol = "NVDA") {
@@ -144,27 +145,123 @@ function buildDashboardFromFinnhub(symbol, { quote }) {
   };
 }
 
-function callFinnhub(method, ...args) {
-  const client = getFinnhubClient();
-  if (!client) {
+function requestFinnhub(pathname, params = {}, { timeout = 20_000 } = {}) {
+  const apiKey = getFinnhubApiKey();
+  if (!apiKey) {
     return Promise.resolve(null);
   }
 
-  return new Promise((resolve, reject) => {
-    client[method](...args, (error, data, response) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      if (response?.statusCode && response.statusCode >= 400) {
-        reject(new Error(`Finnhub ${method} failed: ${response.statusCode}`));
-        return;
-      }
-
-      resolve(data);
-    });
+  const url = new URL(pathname.replace(/^\/+/, ""), "https://finnhub.io/api/v1/");
+  Object.entries({ ...params, token: apiKey }).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      url.searchParams.set(key, String(value));
+    }
   });
+
+  return requestJson(url, { timeout });
+}
+
+function requestJson(url, { timeout, redirectsLeft = 4 }) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      timeout,
+      headers: {
+        accept: "application/json",
+        "user-agent": "trade-assistant/0.1"
+      }
+    }, (response) => {
+      if (
+        response.statusCode &&
+        response.statusCode >= 300 &&
+        response.statusCode < 400 &&
+        response.headers.location
+      ) {
+        response.resume();
+        if (redirectsLeft <= 0) {
+          reject(new Error("Finnhub redirect limit exceeded"));
+          return;
+        }
+
+        requestJson(new URL(response.headers.location, url), {
+          timeout,
+          redirectsLeft: redirectsLeft - 1
+        }).then(resolve, reject);
+        return;
+      }
+
+      const chunks = [];
+
+      response.on("data", (chunk) => {
+        chunks.push(chunk);
+      });
+
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        let data = text;
+
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch {
+          data = text;
+        }
+
+        if (response.statusCode && response.statusCode >= 400) {
+          const error = new Error(`Finnhub request failed: ${response.statusCode}`);
+          error.statusCode = response.statusCode;
+          error.data = data;
+          reject(error);
+          return;
+        }
+
+        resolve(data);
+      });
+    });
+
+    request.on("timeout", () => {
+      request.destroy(new Error("Finnhub request timed out"));
+    });
+
+    request.on("error", reject);
+  });
+}
+
+function callFinnhub(method, ...args) {
+  if (method === "quote") {
+    return requestFinnhub("/quote", { symbol: args[0] }, { timeout: 20_000 });
+  }
+
+  if (method === "stockSymbols") {
+    const [exchange, opts = {}] = args;
+    return requestFinnhub("/stock/symbol", {
+      exchange,
+      mic: opts.mic,
+      securityType: opts.securityType,
+      currency: opts.currency
+    }, { timeout: 30_000 });
+  }
+
+  return Promise.reject(new Error(`Unsupported Finnhub method: ${method}`));
+}
+
+async function callFinnhubWithRetry(method, ...args) {
+  try {
+    return await callFinnhub(method, ...args);
+  } catch (error) {
+    if (!["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN"].includes(error?.code)) {
+      throw error;
+    }
+
+    return callFinnhub(method, ...args);
+  }
+}
+
+function withTimeout(promise, milliseconds, message) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), milliseconds);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 async function getFinnhubDashboard(symbol) {
@@ -173,7 +270,7 @@ async function getFinnhubDashboard(symbol) {
   }
 
   const normalized = String(symbol || "NVDA").trim().toUpperCase();
-  const quote = await callFinnhub("quote", normalized);
+  const quote = await callFinnhubWithRetry("quote", normalized);
 
   return buildDashboardFromFinnhub(normalized, {
     quote
@@ -268,13 +365,28 @@ function makeMarketCard({ symbol, name, kind, base }, quote = null) {
   };
 }
 
+function baseForSymbol(symbol) {
+  const random = makeRandom(`base:${symbol}`);
+  return 80 + random() * 520;
+}
+
+function toStockDefinition(item) {
+  const symbol = String(item?.symbol || "").trim().toUpperCase();
+  return {
+    symbol,
+    name: String(item?.name || symbol).trim() || symbol,
+    kind: "stock",
+    base: baseForSymbol(symbol)
+  };
+}
+
 async function buildMarketCardWithQuote(definition) {
   if (!getFinnhubApiKey()) {
     return makeMarketCard(definition);
   }
 
   try {
-    const quote = await callFinnhub("quote", definition.symbol);
+    const quote = await callFinnhubWithRetry("quote", definition.symbol);
     return makeMarketCard(definition, quote);
   } catch (error) {
     console.warn(`Finnhub quote unavailable for ${definition.symbol}, using fallback card:`, formatFinnhubError(error));
@@ -282,40 +394,56 @@ async function buildMarketCardWithQuote(definition) {
   }
 }
 
-async function getMarketOverview() {
+async function getMarketOverview(watchlistItems = defaultWatchlist) {
   const indexDefinitions = [
-    { symbol: "IXIC", name: "NASDAQ Composite", kind: "index", base: 18940 },
-    { symbol: "SPX", name: "S&P 500", kind: "index", base: 5824 },
-    { symbol: "DJI", name: "Dow Jones", kind: "index", base: 42112 }
+    { symbol: "IXIC", name: "Nasdaq Composite", kind: "index", base: 18940 },
+    { symbol: "DJI", name: "Dow Jones Industrial Average", kind: "index", base: 42112 },
+    { symbol: "SPX", name: "S&P 500", kind: "index", base: 5824 }
   ];
 
-  const watchlistDefinitions = [
-    { symbol: "NVDA", name: "NVIDIA", kind: "stock", base: 213 },
-    { symbol: "MSFT", name: "Microsoft", kind: "stock", base: 487 },
-    { symbol: "TSLA", name: "Tesla", kind: "stock", base: 178 },
-    { symbol: "AMD", name: "AMD", kind: "stock", base: 163 },
-    { symbol: "AAPL", name: "Apple", kind: "stock", base: 198 },
-    { symbol: "META", name: "Meta Platforms", kind: "stock", base: 642 }
-  ];
+  const watchlistDefinitions = watchlistItems
+    .map(toStockDefinition)
+    .filter((item) => item.symbol);
 
-  const macroDefinitions = [
-    { symbol: "XAUUSD", name: "Gold Spot", kind: "macro", base: 2375 },
-    { symbol: "WTI", name: "WTI Crude Oil", kind: "macro", base: 78 },
-    { symbol: "DXY", name: "US Dollar Index", kind: "macro", base: 104 }
-  ];
-
-  const [indexes, watchlist, macro] = await Promise.all([
+  const [indexes, watchlist] = await Promise.all([
     Promise.all(indexDefinitions.map(buildMarketCardWithQuote)),
-    Promise.all(watchlistDefinitions.map(buildMarketCardWithQuote)),
-    Promise.all(macroDefinitions.map(buildMarketCardWithQuote))
+    Promise.all(watchlistDefinitions.map(buildMarketCardWithQuote))
   ]);
 
   return {
     updatedAt: new Date().toISOString(),
     indexes,
     watchlist,
-    macro
+    macro: []
   };
+}
+
+async function fetchUsSymbols() {
+  if (!getFinnhubApiKey()) {
+    return [];
+  }
+
+  try {
+    const payload = await withTimeout(
+      callFinnhubWithRetry("stockSymbols", "US", {}),
+      35_000,
+      "Finnhub US symbols timed out"
+    );
+    const mapped = Array.isArray(payload)
+      ? payload
+        .map((item) => ({
+          symbol: String(item.displaySymbol || item.symbol || "").trim().toUpperCase(),
+          name: String(item.description || "").trim(),
+          type: String(item.type || "").trim()
+        }))
+        .filter((item) => item.symbol && item.name)
+      : [];
+
+    return mapped;
+  } catch (error) {
+    console.warn("Finnhub US symbols unavailable:", formatFinnhubError(error));
+    return [];
+  }
 }
 
 module.exports = {
@@ -323,5 +451,6 @@ module.exports = {
   getDashboard,
   getFinnhubClient,
   getFinnhubApiKey,
-  getMarketOverview
+  getMarketOverview,
+  fetchUsSymbols
 };

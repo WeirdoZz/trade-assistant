@@ -13,6 +13,7 @@ import {
   Gauge,
   LineChart,
   Newspaper,
+  Plus,
   RefreshCw,
   Search,
   Settings2,
@@ -62,6 +63,38 @@ const watchlist = [
   { symbol: "AMD", label: "AMD", change: "+1.46%", state: "量能恢复" }
 ];
 
+const browserWatchlistKey = "trade-assistant.watchlist";
+
+function getBrowserWatchlist(): WatchlistItem[] {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(browserWatchlistKey) || "[]");
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return [];
+    }
+
+    return parsed
+      .map((item) => ({
+        symbol: String(item?.symbol || "").trim().toUpperCase(),
+        name: String(item?.name || item?.symbol || "").trim()
+      }))
+      .filter((item) => item.symbol);
+  } catch {
+    return [];
+  }
+}
+
+function addBrowserWatchlistItem(item: WatchlistItem) {
+  const current = getBrowserWatchlist();
+  const symbol = item.symbol.trim().toUpperCase();
+  if (!symbol || current.some((entry) => entry.symbol === symbol)) {
+    return current;
+  }
+
+  const next = [...current, { symbol, name: item.name || symbol }];
+  window.localStorage.setItem(browserWatchlistKey, JSON.stringify(next));
+  return next;
+}
+
 const optionFlow = [
   { strike: "Call 140", expiry: "06/21", premium: "$8.4M", bias: "看涨" },
   { strike: "Put 120", expiry: "06/21", premium: "$2.1M", bias: "对冲" },
@@ -102,27 +135,18 @@ function buildOverviewCard(symbol: string, name: string, kind: MarketCard["kind"
   };
 }
 
-function buildBrowserFallbackOverview(): MarketOverviewData {
+function buildBrowserFallbackOverview(watchlistItems = getBrowserWatchlist()): MarketOverviewData {
   return {
     updatedAt: new Date().toISOString(),
     indexes: [
-      buildOverviewCard("IXIC", "NASDAQ Composite", "index", 18940),
-      buildOverviewCard("SPX", "S&P 500", "index", 5824),
-      buildOverviewCard("DJI", "Dow Jones", "index", 42112)
+      buildOverviewCard("IXIC", "Nasdaq Composite", "index", 18940),
+      buildOverviewCard("DJI", "Dow Jones Industrial Average", "index", 42112),
+      buildOverviewCard("SPX", "S&P 500", "index", 5824)
     ],
-    watchlist: [
-      buildOverviewCard("NVDA", "NVIDIA", "stock", 213),
-      buildOverviewCard("MSFT", "Microsoft", "stock", 487),
-      buildOverviewCard("TSLA", "Tesla", "stock", 178),
-      buildOverviewCard("AMD", "AMD", "stock", 163),
-      buildOverviewCard("AAPL", "Apple", "stock", 198),
-      buildOverviewCard("META", "Meta Platforms", "stock", 642)
-    ],
-    macro: [
-      buildOverviewCard("XAUUSD", "Gold Spot", "macro", 2375),
-      buildOverviewCard("WTI", "WTI Crude Oil", "macro", 78),
-      buildOverviewCard("DXY", "US Dollar Index", "macro", 104)
-    ]
+    watchlist: watchlistItems.map((item, index) => (
+      buildOverviewCard(item.symbol, item.name, "stock", 120 + index * 43)
+    )),
+    macro: []
   };
 }
 
@@ -184,6 +208,8 @@ function App() {
   const [positionsData, setPositionsData] = useState<PositionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [overviewLoading, setOverviewLoading] = useState(true);
+  const [watchlistVersion, setWatchlistVersion] = useState(0);
+  const [usSymbols, setUsSymbols] = useState<SymbolSearchResult[]>([]);
   const [positionsLoading, setPositionsLoading] = useState(false);
   const [positionsError, setPositionsError] = useState<string | null>(null);
   const [clientState, setClientState] = useState<"加载中" | "本地就绪" | "浏览器预览" | "不可用">("加载中");
@@ -255,6 +281,41 @@ function App() {
     return () => {
       cancelled = true;
     };
+  }, [watchlistVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const symbolsPromise = window.tradeAssistant
+      ? window.tradeAssistant.getUsSymbols()
+      : Promise.resolve([]);
+
+    symbolsPromise
+      .then((payload) => {
+        if (!cancelled && payload.length > 0) {
+          setUsSymbols(payload);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUsSymbols([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.tradeAssistant) {
+      return;
+    }
+
+    return window.tradeAssistant.onUsSymbolsUpdated((payload) => {
+      if (payload.length > 0) {
+        setUsSymbols(payload);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -416,6 +477,16 @@ function App() {
     setResearchMode("detail");
   };
 
+  const addToWatchlist = async (item: WatchlistItem) => {
+    if (window.tradeAssistant) {
+      await window.tradeAssistant.addWatchlistItem(item);
+    } else {
+      addBrowserWatchlistItem(item);
+    }
+
+    setWatchlistVersion((version) => version + 1);
+  };
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -492,6 +563,8 @@ function App() {
                 data={overviewData}
                 loading={overviewLoading}
                 onOpenDetail={openResearchDetail}
+                onAddWatchlist={addToWatchlist}
+                symbols={usSymbols}
               />
             ) : (
               <>
@@ -710,15 +783,19 @@ function mergeRealtimeTrade(current: DashboardData | null, trade: FinnhubTrade):
 function MarketOverview({
   data,
   loading,
-  onOpenDetail
+  onOpenDetail,
+  onAddWatchlist,
+  symbols
 }: {
   data: MarketOverviewData | null;
   loading: boolean;
   onOpenDetail: (symbol: string) => void;
+  onAddWatchlist: (item: WatchlistItem) => Promise<void>;
+  symbols: SymbolSearchResult[];
 }) {
   const indexes = data?.indexes ?? [];
   const watchCards = data?.watchlist ?? [];
-  const macro = data?.macro ?? [];
+  const watchSymbols = useMemo(() => new Set(watchCards.map((card) => card.symbol)), [watchCards]);
 
   return (
     <>
@@ -754,7 +831,11 @@ function MarketOverview({
             <span>Watchlist</span>
             <h2>我的关注</h2>
           </div>
-          <button className="ghost-button">管理自选</button>
+          <WatchlistSearch
+            watchSymbols={watchSymbols}
+            onAdd={onAddWatchlist}
+            symbols={symbols}
+          />
         </div>
         <div className="market-card-grid watch">
           {watchCards.map((card) => (
@@ -762,17 +843,94 @@ function MarketOverview({
           ))}
         </div>
       </section>
-
-      <section className="macro-dock" aria-label="宏观价格">
-        {macro.map((card) => (
-          <button className="macro-tile" key={card.symbol} onClick={() => onOpenDetail(card.symbol)}>
-            <span>{card.name}</span>
-            <strong>{formatPrice(card)}</strong>
-            <ChangeText change={card.dayChange} />
-          </button>
-        ))}
-      </section>
     </>
+  );
+}
+
+function WatchlistSearch({
+  watchSymbols,
+  onAdd,
+  symbols
+}: {
+  watchSymbols: Set<string>;
+  onAdd: (item: WatchlistItem) => Promise<void>;
+  symbols: SymbolSearchResult[];
+}) {
+  const [query, setQuery] = useState("");
+  const [addingSymbol, setAddingSymbol] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const trimmedQuery = query.trim();
+  const results = useMemo(() => {
+    const normalized = trimmedQuery.toUpperCase();
+    if (!normalized) {
+      return [];
+    }
+
+    return symbols
+      .filter((item) => (
+        item.symbol.includes(normalized) ||
+        item.name.toUpperCase().includes(normalized)
+      ))
+      .slice(0, 10);
+  }, [symbols, trimmedQuery]);
+
+  const addResult = async (result: SymbolSearchResult) => {
+    setAddingSymbol(result.symbol);
+    try {
+      await onAdd({ symbol: result.symbol, name: result.name || result.symbol });
+      setQuery("");
+      setOpen(false);
+    } finally {
+      setAddingSymbol(null);
+    }
+  };
+
+  return (
+    <div
+      className="watchlist-search"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setOpen(false);
+        }
+      }}
+    >
+      <Search size={16} />
+      <input
+        value={query}
+        onFocus={() => setOpen(true)}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        placeholder="搜索代码或名称"
+        aria-label="搜索关注股票"
+      />
+      {open && trimmedQuery ? (
+        <div className="symbol-results">
+          {results.length === 0 ? <div className="symbol-result empty">无匹配结果</div> : null}
+          {results.map((result) => {
+            const added = watchSymbols.has(result.symbol);
+            return (
+              <div className="symbol-result" key={result.symbol}>
+                <div>
+                  <strong>{result.symbol}</strong>
+                  <span>{result.name}</span>
+                </div>
+                <button
+                  className="add-symbol-button"
+                  type="button"
+                  onClick={() => addResult(result)}
+                  disabled={added || addingSymbol === result.symbol}
+                  aria-label={`添加 ${result.symbol} 到我的关注`}
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

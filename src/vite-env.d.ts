@@ -5,10 +5,13 @@ interface Window {
     platform: string;
     getDashboard: (symbol: string) => Promise<DashboardData>;
     getMarketOverview: () => Promise<MarketOverviewData>;
+    getUsSymbols: () => Promise<SymbolSearchResult[]>;
+    addWatchlistItem: (item: WatchlistItem) => Promise<WatchlistItem[]>;
     subscribeFinnhub: (symbol: string) => Promise<FinnhubStatus>;
     unsubscribeFinnhub: () => Promise<FinnhubStatus>;
     onFinnhubStatus: (handler: (status: FinnhubStatus) => void) => () => void;
     onFinnhubTrade: (handler: (trade: FinnhubTrade) => void) => () => void;
+    onUsSymbolsUpdated: (handler: (symbols: SymbolSearchResult[]) => void) => () => void;
     getPositions: (broker: BrokerId) => Promise<PositionsResponse>;
     getLongbridgeStatus: () => Promise<LongbridgeStatus>;
     startLongbridgeOAuth: (options?: { force?: boolean }) => Promise<LongbridgeStatus>;
@@ -82,6 +85,17 @@ type MarketOverviewData = {
   indexes: MarketCard[];
   watchlist: MarketCard[];
   macro: MarketCard[];
+};
+
+type WatchlistItem = {
+  symbol: string;
+  name: string;
+};
+
+type SymbolSearchResult = {
+  symbol: string;
+  name: string;
+  type?: string;
 };
 
 type LongbridgeStatus = {

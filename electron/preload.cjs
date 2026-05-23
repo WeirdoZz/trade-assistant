@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("tradeAssistant", {
   platform: process.platform,
   getDashboard: (symbol) => ipcRenderer.invoke("dashboard:get", symbol),
   getMarketOverview: () => ipcRenderer.invoke("market-overview:get"),
+  getUsSymbols: () => ipcRenderer.invoke("symbols:list-us"),
+  addWatchlistItem: (item) => ipcRenderer.invoke("watchlist:add", item),
   subscribeFinnhub: (symbol) => ipcRenderer.invoke("finnhub:subscribe", symbol),
   unsubscribeFinnhub: () => ipcRenderer.invoke("finnhub:unsubscribe"),
   onFinnhubStatus: (handler) => {
@@ -15,6 +17,11 @@ contextBridge.exposeInMainWorld("tradeAssistant", {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on("finnhub:trade", listener);
     return () => ipcRenderer.removeListener("finnhub:trade", listener);
+  },
+  onUsSymbolsUpdated: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("symbols:updated", listener);
+    return () => ipcRenderer.removeListener("symbols:updated", listener);
   },
   getPositions: (broker) => ipcRenderer.invoke("positions:get", broker),
   getLongbridgeStatus: () => ipcRenderer.invoke("longbridge:status"),

@@ -1,8 +1,11 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const { FinnhubRealtime } = require("./services/finnhubRealtime.cjs");
-const { getDashboard, getMarketOverview } = require("./services/marketData.cjs");
+const { getDashboard, getMarketOverview, fetchUsSymbols } = require("./services/marketData.cjs");
 const { getPositions } = require("./services/positions.cjs");
+const { createWatchlistStore } = require("./services/watchlist.cjs");
+const { createSymbolStore } = require("./services/symbolStore.cjs");
+const { createStartupTasks, createRefreshUsSymbolsTask } = require("./services/startupTasks.cjs");
 const {
   getLongbridgeStatus,
   startLongbridgeOAuth
@@ -10,6 +13,9 @@ const {
 
 const isDev = !app.isPackaged;
 const finnhubRealtime = new FinnhubRealtime();
+let watchlistStore = null;
+let symbolStore = null;
+let startupTasks = null;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -42,7 +48,9 @@ function createWindow() {
 
 function registerIpcHandlers() {
   ipcMain.handle("dashboard:get", (_event, symbol) => getDashboard(symbol));
-  ipcMain.handle("market-overview:get", () => getMarketOverview());
+  ipcMain.handle("market-overview:get", () => getMarketOverview(watchlistStore.readWatchlist()));
+  ipcMain.handle("symbols:list-us", () => symbolStore.readSymbols());
+  ipcMain.handle("watchlist:add", (_event, item) => watchlistStore.addWatchlistItem(item));
   ipcMain.handle("finnhub:subscribe", (event, symbol) => finnhubRealtime.subscribe(event.sender, symbol));
   ipcMain.handle("finnhub:unsubscribe", () => {
     finnhubRealtime.unsubscribe();
@@ -55,9 +63,27 @@ function registerIpcHandlers() {
   ));
 }
 
+function createServices() {
+  const userDataPath = app.getPath("userData");
+  watchlistStore = createWatchlistStore(userDataPath);
+  symbolStore = createSymbolStore(userDataPath, fetchUsSymbols);
+  startupTasks = createStartupTasks([
+    createRefreshUsSymbolsTask({
+      symbolStore,
+      notifyUpdated: (symbols) => {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          window.webContents.send("symbols:updated", symbols);
+        });
+      }
+    })
+  ]);
+}
+
 app.whenReady().then(() => {
+  createServices();
   registerIpcHandlers();
   createWindow();
+  void startupTasks.run();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
