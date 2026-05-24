@@ -5,6 +5,7 @@ interface Window {
     platform: string;
     getDashboard: (symbol: string) => Promise<DashboardData>;
     getMarketOverview: () => Promise<MarketOverviewData>;
+    getNewsPage: () => Promise<NewsPageData>;
     getUsSymbols: () => Promise<SymbolSearchResult[]>;
     addWatchlistItem: (item: WatchlistItem) => Promise<WatchlistItem[]>;
     removeWatchlistItem: (symbol: string) => Promise<WatchlistItem[]>;
@@ -63,6 +64,45 @@ type NewsItem = {
   tickerSentimentLabel?: string | null;
   tickerSentimentScore?: number | null;
   relevanceScore?: number | null;
+};
+
+type NewsBucket = {
+  label: string;
+  articleCount: number;
+  averageScore: number;
+  stance: string;
+  positive: number;
+  neutral: number;
+  negative: number;
+  articles: NewsItem[];
+};
+
+type NewsTopicBucket = NewsBucket & {
+  topic: string;
+};
+
+type WatchlistNewsBucket = Omit<NewsBucket, "label"> & {
+  symbol: string;
+};
+
+type NewsPageData = {
+  updatedAt: string;
+  summary: {
+    articleCount: number;
+    averageScore: number;
+    stance: string;
+    positive: number;
+    neutral: number;
+    negative: number;
+  };
+  market: NewsBucket;
+  macro: {
+    monetary: NewsBucket;
+    fiscal: NewsBucket;
+    macro: NewsBucket;
+  };
+  topics: NewsTopicBucket[];
+  watchlist: WatchlistNewsBucket[];
 };
 
 type SecurityRatings = {

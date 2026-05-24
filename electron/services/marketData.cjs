@@ -12,8 +12,13 @@ const {
 loadDotEnv(path.join(__dirname, "../.."));
 
 const LONGBRIDGE_DAILY_CANDLE_COUNT = 90;
+const ALPHA_VANTAGE_NEWS_CACHE_TTL_MS = 15 * 60 * 1000;
+const ALPHA_VANTAGE_LIMIT_CACHE_TTL_MS = 60 * 60 * 1000;
+const ALPHA_VANTAGE_REQUEST_INTERVAL_MS = 1_100;
 const longbridgeCandlestickCache = new Map();
 const longbridgeRatingsCache = new Map();
+const alphaVantageNewsCache = new Map();
+let alphaVantageLastRequestAt = 0;
 const LONG_BRIDGE_CALC_INDEXES = [
   CalcIndex.LastDone,
   CalcIndex.ChangeValue,
@@ -290,25 +295,58 @@ async function fetchAlphaVantageNews(symbol, options = {}) {
     days = 5,
     requestLimit = 50,
     returnLimit = 20,
+    topics = null,
     now = () => new Date(),
     request = (url) => requestJson(url, { timeout: 20_000 })
   } = options;
   const apiKey = getAlphaVantageApiKey();
   const normalized = String(symbol || "").trim().toUpperCase();
-  if (!apiKey || !normalized) {
+  const normalizedTopics = String(topics || "").trim();
+  if (!apiKey || (!normalized && !normalizedTopics)) {
     console.info("[alphavantage:news] skipped", {
-      reason: !apiKey ? "missing ALPHA_VANTAGE_API_KEY" : "empty symbol",
-      symbol: normalized || symbol
+      reason: !apiKey ? "missing ALPHA_VANTAGE_API_KEY" : "empty symbol/topics",
+      symbol: normalized || symbol,
+      topics: normalizedTopics || null
     });
     return [];
   }
 
   const from = new Date(now());
   from.setUTCDate(from.getUTCDate() - days);
+  const cacheDisabled = process.env.TRADE_ASSISTANT_DISABLE_ALPHA_VANTAGE_NEWS_CACHE === "1";
+  const cacheKey = JSON.stringify({
+    symbol: normalized,
+    topics: normalizedTopics,
+    days,
+    requestLimit,
+    returnLimit
+  });
+  const cached = cacheDisabled ? null : alphaVantageNewsCache.get(cacheKey);
+  const currentTime = now().getTime();
+  if (cached && currentTime - cached.cachedAt < ALPHA_VANTAGE_NEWS_CACHE_TTL_MS) {
+    console.info("[alphavantage:news] cache hit", {
+      symbol: normalized,
+      topics: normalizedTopics || null,
+      count: cached.news.length
+    });
+    return cached.news;
+  }
+  if (cached && cached.limited && currentTime - cached.cachedAt < ALPHA_VANTAGE_LIMIT_CACHE_TTL_MS) {
+    console.info("[alphavantage:news] limit cache hit", {
+      symbol: normalized,
+      topics: normalizedTopics || null
+    });
+    return [];
+  }
 
   const url = new URL("https://www.alphavantage.co/query");
   url.searchParams.set("function", "NEWS_SENTIMENT");
-  url.searchParams.set("tickers", normalized);
+  if (normalized) {
+    url.searchParams.set("tickers", normalized);
+  }
+  if (normalizedTopics) {
+    url.searchParams.set("topics", normalizedTopics);
+  }
   url.searchParams.set("time_from", formatAlphaVantageTimeFrom(from));
   url.searchParams.set("sort", "RELEVANCE");
   url.searchParams.set("limit", String(requestLimit));
@@ -317,13 +355,20 @@ async function fetchAlphaVantageNews(symbol, options = {}) {
   try {
     console.info("[alphavantage:news] request", {
       symbol: normalized,
+      topics: normalizedTopics || null,
       days,
       requestLimit,
       returnLimit,
       sort: "RELEVANCE"
     });
+    const delay = Math.max(0, ALPHA_VANTAGE_REQUEST_INTERVAL_MS - (Date.now() - alphaVantageLastRequestAt));
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    alphaVantageLastRequestAt = Date.now();
     const response = await request(url);
     const feed = Array.isArray(response?.feed) ? response.feed : [];
+    const limited = Boolean(response?.Information || response?.Note);
     const news = feed
       .map((item) => normalizeAlphaVantageNewsItem(item, normalized))
       .filter(Boolean)
@@ -338,16 +383,153 @@ async function fetchAlphaVantageNews(symbol, options = {}) {
       .slice(0, returnLimit);
     console.info("[alphavantage:news] response", {
       symbol: normalized,
+      topics: normalizedTopics || null,
       rawCount: feed.length,
       count: news.length,
       information: response?.Information,
       note: response?.Note
     });
+    if (limited && !cacheDisabled) {
+      alphaVantageNewsCache.set(cacheKey, {
+        cachedAt: currentTime,
+        limited: true,
+        news: []
+      });
+      return [];
+    }
+    if (!cacheDisabled) {
+      alphaVantageNewsCache.set(cacheKey, {
+        cachedAt: currentTime,
+        news
+      });
+    }
     return news;
   } catch (error) {
     console.warn("[alphavantage:news] unavailable", formatFinnhubError(error));
     return [];
   }
+}
+
+function summarizeNewsBucket(articles = []) {
+  const counts = { positive: 0, neutral: 0, negative: 0 };
+  let scoreTotal = 0;
+  let scored = 0;
+
+  for (const item of articles) {
+    const sentiment = item?.sentiment || "neutral";
+    counts[sentiment] = (counts[sentiment] ?? 0) + 1;
+    if (Number.isFinite(item?.tickerSentimentScore)) {
+      scoreTotal += item.tickerSentimentScore;
+      scored += 1;
+    } else if (Number.isFinite(item?.sentimentScore)) {
+      scoreTotal += item.sentimentScore;
+      scored += 1;
+    }
+  }
+
+  const averageScore = scored > 0 ? Number((scoreTotal / scored).toFixed(3)) : 0;
+  const stance = counts.positive > counts.negative
+    ? "positive"
+    : counts.negative > counts.positive
+      ? "negative"
+      : "neutral";
+
+  return {
+    articleCount: articles.length,
+    averageScore,
+    stance,
+    ...counts
+  };
+}
+
+function makeNewsBucket(label, articles = []) {
+  return {
+    label,
+    ...summarizeNewsBucket(articles),
+    articles
+  };
+}
+
+const NEWS_TOPIC_DEFINITIONS = [
+  { topic: "technology", label: "科技" },
+  { topic: "earnings", label: "财报" },
+  { topic: "mergers_and_acquisitions", label: "并购" },
+  { topic: "ipo", label: "IPO" },
+  { topic: "finance", label: "金融" },
+  { topic: "energy_transportation", label: "能源与运输" }
+];
+
+async function getNewsPage(watchlistItems = defaultWatchlist, options = {}) {
+  const {
+    now = () => new Date(),
+    request,
+    expanded = false
+  } = options;
+  const common = { now, request, days: 5, requestLimit: 30, returnLimit: 10 };
+  const watchlist = [...new Set(watchlistItems
+    .map((item) => String(item?.symbol || "").trim().toUpperCase())
+    .filter(Boolean))]
+    .slice(0, expanded ? 4 : 1);
+  const activeTopics = (expanded ? NEWS_TOPIC_DEFINITIONS : NEWS_TOPIC_DEFINITIONS.slice(0, 1));
+
+  const marketArticles = await fetchAlphaVantageNews("", { ...common, topics: "financial_markets", returnLimit: 12 });
+  const monetaryArticles = await fetchAlphaVantageNews("", { ...common, topics: "economy_monetary", returnLimit: 8 });
+  const fiscalArticles = expanded
+    ? await fetchAlphaVantageNews("", { ...common, topics: "economy_fiscal", returnLimit: 8 })
+    : [];
+  const macroArticles = expanded
+    ? await fetchAlphaVantageNews("", { ...common, topics: "economy_macro", returnLimit: 8 })
+    : [];
+  const topicResults = [];
+  for (const definition of activeTopics) {
+    const articles = await fetchAlphaVantageNews("", {
+      ...common,
+      topics: definition.topic,
+      returnLimit: 6
+    });
+    topicResults.push({
+      topic: definition.topic,
+      label: definition.label,
+      ...summarizeNewsBucket(articles),
+      articles
+    });
+  }
+  const watchlistResults = [];
+  for (const symbol of watchlist) {
+    const articles = await fetchAlphaVantageNews(symbol, {
+      ...common,
+      requestLimit: 40,
+      returnLimit: 8
+    });
+    watchlistResults.push({
+      symbol,
+      ...summarizeNewsBucket(articles),
+      articles
+    });
+  }
+
+  const allArticles = [
+    ...marketArticles,
+    ...monetaryArticles,
+    ...fiscalArticles,
+    ...macroArticles,
+    ...topicResults.flatMap((topic) => topic.articles),
+    ...watchlistResults.flatMap((item) => item.articles)
+  ];
+  const summary = summarizeNewsBucket(allArticles);
+
+  return {
+    updatedAt: new Date().toISOString(),
+    summary,
+    market: makeNewsBucket("市场总览", marketArticles),
+    macro: {
+      monetary: makeNewsBucket("美联储与货币政策", monetaryArticles),
+      fiscal: makeNewsBucket("财政政策", fiscalArticles),
+      macro: makeNewsBucket("宏观经济", macroArticles)
+    },
+    topics: topicResults,
+    watchlist: watchlistResults
+  };
 }
 
 function requestJson(url, { timeout, redirectsLeft = 4, headers = {} }) {
@@ -1330,6 +1512,7 @@ module.exports = {
   getFinnhubApiKey,
   getAlphaVantageApiKey,
   getMarketOverview,
+  getNewsPage,
   makeMarketCard,
   fetchUsSymbols
 };

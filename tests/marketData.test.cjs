@@ -12,6 +12,7 @@ const {
   fetchLongbridgeStaticInfo,
   getFinnhubApiKey,
   getMarketOverview,
+  getNewsPage,
   makeMarketCard
 } = require("../electron/services/marketData.cjs");
 
@@ -179,6 +180,60 @@ test("alpha vantage news fetch requests 5-day window and returns top 20 by relev
       tickerSentimentScore: 0.42,
       relevanceScore: 0.95
     });
+  } finally {
+    if (originalAlpha === undefined) {
+      delete process.env.ALPHA_VANTAGE_API_KEY;
+    } else {
+      process.env.ALPHA_VANTAGE_API_KEY = originalAlpha;
+    }
+  }
+});
+
+test("news page groups market, macro, topic, and watchlist news", async () => {
+  const originalAlpha = process.env.ALPHA_VANTAGE_API_KEY;
+  process.env.ALPHA_VANTAGE_API_KEY = "alpha-key";
+  const calls = [];
+  const request = async (url) => {
+    calls.push({
+      tickers: url.searchParams.get("tickers"),
+      topics: url.searchParams.get("topics")
+    });
+    const label = url.searchParams.get("tickers") || url.searchParams.get("topics") || "market";
+    return {
+      feed: [{
+        title: `${label} headline`,
+        url: `https://example.com/${label}`,
+        time_published: "20260523T103000",
+        source: "Example Wire",
+        summary: `${label} summary`,
+        overall_sentiment_label: "Neutral",
+        overall_sentiment_score: "0",
+        ticker_sentiment: url.searchParams.get("tickers") ? [{
+          ticker: url.searchParams.get("tickers"),
+          relevance_score: "0.9",
+          ticker_sentiment_score: "0.1",
+          ticker_sentiment_label: "Neutral"
+        }] : []
+      }]
+    };
+  };
+
+  try {
+    const page = await getNewsPage([
+      { symbol: "AAPL", name: "Apple" },
+      { symbol: "NVDA", name: "NVIDIA" }
+    ], {
+      now: () => new Date("2026-05-24T12:00:00Z"),
+      request
+    });
+
+    assert.equal(page.market.articles[0].title, "financial_markets headline");
+    assert.equal(page.macro.monetary.articles[0].title, "economy_monetary headline");
+    assert.ok(page.topics.some((topic) => topic.topic === "technology"));
+    assert.deepEqual(page.watchlist.map((item) => item.symbol), ["AAPL"]);
+    assert.ok(calls.some((call) => call.topics === "financial_markets"));
+    assert.ok(calls.some((call) => call.topics === "economy_monetary"));
+    assert.ok(calls.some((call) => call.tickers === "AAPL"));
   } finally {
     if (originalAlpha === undefined) {
       delete process.env.ALPHA_VANTAGE_API_KEY;

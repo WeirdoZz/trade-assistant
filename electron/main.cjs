@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const { FinnhubRealtime } = require("./services/finnhubRealtime.cjs");
-const { getDashboard, getMarketOverview, fetchUsSymbols } = require("./services/marketData.cjs");
+const { getDashboard, getMarketOverview, getNewsPage, fetchUsSymbols } = require("./services/marketData.cjs");
 const { getPositions } = require("./services/positions.cjs");
 const { createWatchlistStore } = require("./services/watchlist.cjs");
 const { createSymbolStore } = require("./services/symbolStore.cjs");
@@ -64,6 +64,7 @@ function registerIpcHandlers() {
     subscribeWatchlistSymbols(event.sender);
     return payload;
   });
+  ipcMain.handle("news-page:get", () => getNewsPage(watchlistStore.readWatchlist()));
   ipcMain.handle("symbols:list-us", () => symbolStore.readSymbols());
   ipcMain.handle("watchlist:add", (event, item) => {
     const items = watchlistStore.addWatchlistItem(item);

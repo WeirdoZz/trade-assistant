@@ -71,6 +71,45 @@ type NewsItem = {
   relevanceScore?: number | null;
 };
 
+type NewsBucket = {
+  label: string;
+  articleCount: number;
+  averageScore: number;
+  stance: string;
+  positive: number;
+  neutral: number;
+  negative: number;
+  articles: NewsItem[];
+};
+
+type NewsTopicBucket = NewsBucket & {
+  topic: string;
+};
+
+type WatchlistNewsBucket = Omit<NewsBucket, "label"> & {
+  symbol: string;
+};
+
+type NewsPageData = {
+  updatedAt: string;
+  summary: {
+    articleCount: number;
+    averageScore: number;
+    stance: string;
+    positive: number;
+    neutral: number;
+    negative: number;
+  };
+  market: NewsBucket;
+  macro: {
+    monetary: NewsBucket;
+    fiscal: NewsBucket;
+    macro: NewsBucket;
+  };
+  topics: NewsTopicBucket[];
+  watchlist: WatchlistNewsBucket[];
+};
+
 type SecurityRatings = {
   analyst: AnalystRatings | null;
   institution: InstitutionRating | null;
@@ -172,7 +211,7 @@ type SecurityStaticInfo = {
   board: string | null;
 };
 
-type ViewId = "research" | "positions";
+type ViewId = "research" | "news" | "positions";
 type ResearchMode = "overview" | "detail";
 
 const watchlist = [
@@ -344,6 +383,78 @@ function buildBrowserFallback(symbol: string): DashboardData {
   };
 }
 
+function makeBrowserNewsBucket(label: string, articles: NewsItem[]): NewsBucket {
+  const positive = articles.filter((item) => item.sentiment === "positive").length;
+  const negative = articles.filter((item) => item.sentiment === "negative").length;
+  const neutral = articles.length - positive - negative;
+
+  return {
+    label,
+    articleCount: articles.length,
+    averageScore: 0,
+    stance: positive > negative ? "positive" : negative > positive ? "negative" : "neutral",
+    positive,
+    neutral,
+    negative,
+    articles
+  };
+}
+
+function buildBrowserFallbackNewsPage(watchlistItems = getBrowserWatchlist()): NewsPageData {
+  const now = new Date().toISOString();
+  const makeArticle = (title: string, source: string, sentiment: string): NewsItem => ({
+    title,
+    source,
+    sentiment,
+    time: now,
+    summary: "浏览器预览新闻摘要。Electron 桌面模式会通过 Alpha Vantage 获取真实新闻与情绪。",
+    url: "",
+    sentimentLabel: sentiment
+  });
+  const market = makeBrowserNewsBucket("市场总览", [
+    makeArticle("市场关注利率路径与科技股财报", "Alpha Vantage Preview", "neutral"),
+    makeArticle("资金回流成长股，风险偏好温和修复", "Alpha Vantage Preview", "positive")
+  ]);
+  const monetary = makeBrowserNewsBucket("美联储与货币政策", [
+    makeArticle("美联储官员强调通胀仍需观察", "Macro Desk", "neutral")
+  ]);
+  const fiscal = makeBrowserNewsBucket("财政政策", [
+    makeArticle("财政支出前景成为市场关注点", "Macro Desk", "neutral")
+  ]);
+  const macro = makeBrowserNewsBucket("宏观经济", [
+    makeArticle("就业与消费数据支持软着陆叙事", "Macro Desk", "positive")
+  ]);
+  const topics = ["technology", "earnings", "finance"].map((topic) => ({
+    ...makeBrowserNewsBucket(topic, [
+      makeArticle(`${topic} 主题新闻占位`, "Topic Wire", "neutral")
+    ]),
+    topic
+  }));
+  const watchlist = (watchlistItems.length ? watchlistItems : [{ symbol: "NVDA", name: "NVIDIA" }]).map((item) => ({
+    ...makeBrowserNewsBucket(item.symbol, [
+      makeArticle(`${item.symbol} 相关新闻占位`, "Watchlist Wire", "positive")
+    ]),
+    symbol: item.symbol
+  }));
+  const allArticles = [
+    ...market.articles,
+    ...monetary.articles,
+    ...fiscal.articles,
+    ...macro.articles,
+    ...topics.flatMap((topic) => topic.articles),
+    ...watchlist.flatMap((item) => item.articles)
+  ];
+
+  return {
+    updatedAt: now,
+    summary: makeBrowserNewsBucket("总览", allArticles),
+    market,
+    macro: { monetary, fiscal, macro },
+    topics,
+    watchlist
+  };
+}
+
 function App() {
   const [activeView, setActiveView] = useState<ViewId>("research");
   const [researchMode, setResearchMode] = useState<ResearchMode>("overview");
@@ -352,9 +463,12 @@ function App() {
   const [query, setQuery] = useState("NVDA");
   const [data, setData] = useState<DashboardData | null>(null);
   const [overviewData, setOverviewData] = useState<MarketOverviewData | null>(null);
+  const [newsPageData, setNewsPageData] = useState<NewsPageData | null>(null);
   const [positionsData, setPositionsData] = useState<PositionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [overviewLoading, setOverviewLoading] = useState(true);
+  const [newsPageLoading, setNewsPageLoading] = useState(false);
+  const [newsPageError, setNewsPageError] = useState<string | null>(null);
   const [watchlistVersion, setWatchlistVersion] = useState(0);
   const [usSymbols, setUsSymbols] = useState<SymbolSearchResult[]>([]);
   const [positionsLoading, setPositionsLoading] = useState(false);
@@ -534,6 +648,45 @@ function App() {
   }, [activeView, broker]);
 
   useEffect(() => {
+    if (activeView !== "news") {
+      return;
+    }
+
+    let cancelled = false;
+    setNewsPageLoading(true);
+    setNewsPageError(null);
+
+    const hasDesktopBridge = Boolean(window.tradeAssistant);
+    const newsPromise = hasDesktopBridge
+      ? window.tradeAssistant!.getNewsPage()
+      : Promise.resolve(buildBrowserFallbackNewsPage());
+
+    newsPromise
+      .then((payload) => {
+        if (!cancelled) {
+          setNewsPageData(payload);
+          setClientState(hasDesktopBridge ? "本地就绪" : "浏览器预览");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setNewsPageData(buildBrowserFallbackNewsPage());
+          setNewsPageError(error instanceof Error ? error.message : "新闻加载失败");
+          setClientState("不可用");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setNewsPageLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, watchlistVersion]);
+
+  useEffect(() => {
     if (!window.tradeAssistant) {
       return;
     }
@@ -677,7 +830,9 @@ function App() {
           <button className={`nav-item ${activeView === "positions" ? "active" : ""}`} onClick={() => setActiveView("positions")}>
             <WalletCards size={18} /> 我的持仓
           </button>
-          <button className="nav-item"><Newspaper size={18} /> 新闻情绪</button>
+          <button className={`nav-item ${activeView === "news" ? "active" : ""}`} onClick={() => setActiveView("news")}>
+            <Newspaper size={18} /> 新闻情绪
+          </button>
           <button className="nav-item"><Activity size={18} /> 期权异动</button>
           <button className="nav-item"><BrainCircuit size={18} /> AI 策略</button>
           <button className="nav-item"><Database size={18} /> 数据源</button>
@@ -932,6 +1087,16 @@ function App() {
               </>
             )}
           </>
+        ) : activeView === "news" ? (
+          <NewsSentimentView
+            data={newsPageData}
+            loading={newsPageLoading}
+            error={newsPageError}
+            onOpenDetail={(nextSymbol) => {
+              setActiveView("research");
+              openResearchDetail(nextSymbol);
+            }}
+          />
         ) : (
           <PositionsView
             broker={broker}
@@ -1559,6 +1724,200 @@ function formatTime(value?: string) {
 
 function getNewsKey(item: NewsItem) {
   return item.url || `${item.title}:${item.time}`;
+}
+
+function NewsSentimentView({
+  data,
+  loading,
+  error,
+  onOpenDetail
+}: {
+  data: NewsPageData | null;
+  loading: boolean;
+  error: string | null;
+  onOpenDetail: (symbol: string) => void;
+}) {
+  const summary = data?.summary;
+
+  return (
+    <section className="news-page">
+      <header className="news-page-hero">
+        <div>
+          <span>News Sentiment</span>
+          <h1>市场新闻情绪</h1>
+          <p>从全市场、宏观政策、热点主题到自选股新闻，按相关度与时间整理。</p>
+        </div>
+        <div className="news-hero-metrics">
+          <Metric icon={<Newspaper size={18} />} label="新闻数" value={loading ? "--" : `${summary?.articleCount ?? 0}`} />
+          <Metric icon={<Activity size={18} />} label="情绪" value={loading ? "--" : formatStance(summary?.stance)} />
+          <Metric icon={<Gauge size={18} />} label="均分" value={loading ? "--" : formatMetricText(summary?.averageScore)} />
+        </div>
+      </header>
+
+      {error ? <p className="inline-note error">{error}</p> : null}
+
+      <section className="news-page-grid">
+        <div className="news-main-column">
+          <NewsBucketPanel title="市场总览" bucket={data?.market ?? null} loading={loading} />
+          <section className="news-section">
+            <div className="section-heading compact">
+              <div>
+                <span>Macro Policy</span>
+                <h2>宏观与政策</h2>
+              </div>
+              <Database size={20} />
+            </div>
+            <div className="macro-news-grid">
+              <NewsBucketPanel title="美联储与货币政策" bucket={data?.macro.monetary ?? null} loading={loading} compact />
+              <NewsBucketPanel title="财政政策" bucket={data?.macro.fiscal ?? null} loading={loading} compact />
+              <NewsBucketPanel title="宏观经济" bucket={data?.macro.macro ?? null} loading={loading} compact />
+            </div>
+          </section>
+          <section className="news-section">
+            <div className="section-heading compact">
+              <div>
+                <span>Market Themes</span>
+                <h2>市场热点</h2>
+              </div>
+              <Sparkles size={20} />
+            </div>
+            <div className="topic-news-grid">
+              {(data?.topics ?? []).map((topic) => (
+                <NewsTopicCard topic={topic} key={topic.topic} loading={loading} />
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <aside className="news-side-column">
+          <section className="news-section">
+            <div className="section-heading compact">
+              <div>
+                <span>Watchlist</span>
+                <h2>自选股新闻</h2>
+              </div>
+              <TrendingUp size={20} />
+            </div>
+            <div className="watchlist-news-stack">
+              {(data?.watchlist ?? []).map((bucket) => (
+                <div className="watchlist-news-card" key={bucket.symbol}>
+                  <button type="button" onClick={() => onOpenDetail(bucket.symbol)}>
+                    <strong>{bucket.symbol}</strong>
+                    <span>{bucket.articleCount} 条 · {formatStance(bucket.stance)}</span>
+                  </button>
+                  <NewsArticleList articles={bucket.articles.slice(0, 3)} loading={loading} compact />
+                </div>
+              ))}
+            </div>
+          </section>
+        </aside>
+      </section>
+    </section>
+  );
+}
+
+function NewsBucketPanel({
+  title,
+  bucket,
+  loading,
+  compact = false
+}: {
+  title: string;
+  bucket: NewsBucket | null;
+  loading: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <section className={`news-section ${compact ? "compact-news-section" : ""}`}>
+      <div className="news-bucket-head">
+        <div>
+          <h3>{title}</h3>
+          <span>{loading ? "--" : `${bucket?.articleCount ?? 0} 条 · ${formatStance(bucket?.stance)}`}</span>
+        </div>
+        <b>{loading ? "--" : formatMetricText(bucket?.averageScore)}</b>
+      </div>
+      <NewsArticleList articles={bucket?.articles ?? []} loading={loading} compact={compact} />
+    </section>
+  );
+}
+
+function NewsTopicCard({ topic, loading }: { topic: NewsTopicBucket; loading: boolean }) {
+  return (
+    <article className="topic-news-card">
+      <div className="news-bucket-head">
+        <div>
+          <h3>{topic.label}</h3>
+          <span>{loading ? "--" : `${topic.articleCount} 条 · ${formatStance(topic.stance)}`}</span>
+        </div>
+        <b>{loading ? "--" : formatMetricText(topic.averageScore)}</b>
+      </div>
+      <NewsArticleList articles={topic.articles.slice(0, 2)} loading={loading} compact />
+    </article>
+  );
+}
+
+function NewsArticleList({
+  articles,
+  loading,
+  compact = false
+}: {
+  articles: NewsItem[];
+  loading: boolean;
+  compact?: boolean;
+}) {
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const visibleArticles = loading ? [] : articles;
+
+  if (loading) {
+    return <p className="empty-state">新闻加载中...</p>;
+  }
+
+  if (visibleArticles.length === 0) {
+    return <p className="empty-state">暂无新闻。</p>;
+  }
+
+  return (
+    <div className={`news-list ${compact ? "compact" : ""}`}>
+      {visibleArticles.map((item) => {
+        const key = getNewsKey(item);
+        return (
+          <article className="news-item" key={key}>
+            <div className={`sentiment ${item.sentiment}`} aria-hidden="true" />
+            <div className="news-content">
+              <button
+                className="news-toggle"
+                type="button"
+                onClick={() => setExpandedKey((current) => current === key ? null : key)}
+              >
+                <strong>{item.title}</strong>
+                <span>{item.source} · {formatTime(item.time)}</span>
+              </button>
+              {expandedKey === key ? (
+                <div className="news-detail">
+                  <p>{item.summary || "暂无摘要。"}</p>
+                  <div className="news-tags">
+                    <span>{item.tickerSentimentLabel ?? item.sentimentLabel ?? "Neutral"}</span>
+                    {item.relevanceScore !== undefined && item.relevanceScore !== null ? <span>相关度 {item.relevanceScore.toFixed(2)}</span> : null}
+                  </div>
+                  {item.url ? <a href={item.url} target="_blank" rel="noreferrer">打开新闻源</a> : null}
+                </div>
+              ) : null}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatStance(value?: string | null) {
+  if (value === "positive") {
+    return "偏多";
+  }
+  if (value === "negative") {
+    return "偏空";
+  }
+  return "中性";
 }
 
 function getRealtimeLabel(status: FinnhubStatus | null) {

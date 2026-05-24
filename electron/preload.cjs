@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("tradeAssistant", {
   platform: process.platform,
   getDashboard: (symbol) => ipcRenderer.invoke("dashboard:get", symbol),
   getMarketOverview: () => ipcRenderer.invoke("market-overview:get"),
+  getNewsPage: () => ipcRenderer.invoke("news-page:get"),
   getUsSymbols: () => ipcRenderer.invoke("symbols:list-us"),
   addWatchlistItem: (item) => ipcRenderer.invoke("watchlist:add", item),
   removeWatchlistItem: (symbol) => ipcRenderer.invoke("watchlist:remove", symbol),

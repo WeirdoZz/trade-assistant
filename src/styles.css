@@ -1117,6 +1117,134 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.news-page {
+  display: grid;
+  gap: 18px;
+}
+
+.news-page-hero,
+.news-section,
+.topic-news-card,
+.watchlist-news-card {
+  border: 1px solid rgba(147, 168, 190, 0.15);
+  border-radius: 8px;
+  background: rgba(17, 27, 36, 0.84);
+}
+
+.news-page-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: end;
+  padding: 22px;
+}
+
+.news-page-hero h1 {
+  margin: 4px 0 8px;
+  font-size: 34px;
+}
+
+.news-page-hero p {
+  max-width: 720px;
+  margin: 0;
+  color: #aab9c8;
+  line-height: 1.7;
+}
+
+.news-hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 136px);
+  gap: 10px;
+}
+
+.news-page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(330px, 0.85fr);
+  gap: 18px;
+}
+
+.news-main-column,
+.news-side-column,
+.watchlist-news-stack {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  min-width: 0;
+}
+
+.news-section,
+.topic-news-card,
+.watchlist-news-card {
+  padding: 16px;
+}
+
+.compact-news-section {
+  min-height: 0;
+}
+
+.macro-news-grid,
+.topic-news-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.macro-news-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.topic-news-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.news-bucket-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.news-bucket-head h3 {
+  margin: 0 0 5px;
+  color: #ffffff;
+  font-size: 16px;
+}
+
+.news-bucket-head span {
+  color: #91a1b3;
+  font-size: 12px;
+}
+
+.news-bucket-head b {
+  color: #3ddc97;
+  font-size: 16px;
+}
+
+.watchlist-news-card button {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.watchlist-news-card button strong,
+.watchlist-news-card button span {
+  display: block;
+}
+
+.watchlist-news-card button strong {
+  color: #ffffff;
+}
+
+.watchlist-news-card button span {
+  color: #91a1b3;
+  font-size: 12px;
+}
+
 .inline-note {
   padding: 12px 14px;
   border: 1px solid rgba(114, 211, 255, 0.22);
@@ -1382,13 +1510,17 @@ button:disabled {
   .hero-band,
   .overview-hero,
   .positions-hero,
-  .content-grid {
+  .content-grid,
+  .news-page-hero,
+  .news-page-grid,
+  .macro-news-grid {
     grid-template-columns: 1fr;
   }
 
   .hero-metrics,
   .performance-strip,
-  .portfolio-metrics {
+  .portfolio-metrics,
+  .news-hero-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
@@ -1402,6 +1534,10 @@ button:disabled {
 
   .financial-report-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topic-news-grid {
+    grid-template-columns: 1fr;
   }
 
   .market-card-grid.watch,
