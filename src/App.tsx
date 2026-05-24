@@ -211,7 +211,7 @@ type SecurityStaticInfo = {
   board: string | null;
 };
 
-type ViewId = "research" | "news" | "positions";
+type ViewId = "research" | "news" | "positions" | "options";
 type ResearchMode = "overview" | "detail";
 
 const watchlist = [
@@ -455,6 +455,78 @@ function buildBrowserFallbackNewsPage(watchlistItems = getBrowserWatchlist()): N
   };
 }
 
+function buildBrowserFallbackOptionsHome(watchlistItems = getBrowserWatchlist()): OptionsHomeData {
+  const symbols = (watchlistItems.length > 0 ? watchlistItems : [
+    { symbol: "NVDA", name: "NVIDIA" },
+    { symbol: "AAPL", name: "Apple" },
+    { symbol: "TSLA", name: "Tesla" },
+    { symbol: "AMD", name: "AMD" }
+  ]).slice(0, 8).map((item, index) => {
+    const score = Math.max(44, 91 - index * 7);
+    const callPremium = 7_800_000 - index * 820_000;
+    const putPremium = Math.round(callPremium * (index % 3 === 1 ? 1.2 : 0.46));
+    const direction = callPremium > putPremium ? "bullish" : "bearish";
+    const totalPremium = callPremium + putPremium;
+    const expiration = "2026-06-19";
+
+    return {
+      symbol: item.symbol,
+      name: item.name || item.symbol,
+      score,
+      totalPremium,
+      callPremium,
+      putPremium,
+      volumeOpenInterestRatio: Number((4.8 - index * 0.38).toFixed(2)),
+      ivChange: Number((0.18 - index * 0.012).toFixed(3)),
+      direction,
+      activeDays: index < 3 ? 3 : 2,
+      topExpiry: expiration,
+      eventRisk: index === 0 ? "earnings" : "none",
+      price: Number((120 + index * 38.4).toFixed(2)),
+      priceChange3d: Number((2.8 - index * 0.7).toFixed(2)),
+      relativeVolume: Number((2.6 - index * 0.15).toFixed(2)),
+      contracts: [0, 1, 2].map((contractIndex) => ({
+        contractSymbol: `O:${item.symbol}260619${contractIndex === 1 && direction === "bearish" ? "P" : "C"}${String((160 + index * 20 + contractIndex * 5) * 1000).padStart(8, "0")}`,
+        type: contractIndex === 1 && direction === "bearish" ? "put" : "call",
+        strike: 160 + index * 20 + contractIndex * 5,
+        expiration,
+        premium: Math.round(totalPremium * (0.42 - contractIndex * 0.09)),
+        volume: 4200 - index * 260 - contractIndex * 480,
+        openInterest: 900 + index * 320 + contractIndex * 540,
+        sideEstimate: contractIndex === 0 ? "ask" : "midpoint",
+        impliedVolatility: Number((0.54 + contractIndex * 0.04).toFixed(2))
+      })),
+      timeline: [2, 1, 0].map((daysAgo) => {
+        const date = new Date();
+        date.setDate(date.getDate() - daysAgo);
+        return {
+          date: date.toISOString().slice(0, 10),
+          score: Math.max(20, score - daysAgo * 8 + index),
+          premium: Math.round(totalPremium / (3 + daysAgo * 0.3)),
+          direction
+        };
+      })
+    } as OptionsActivitySymbol;
+  });
+  const callPremium = symbols.reduce((sum, item) => sum + item.callPremium, 0);
+  const putPremium = symbols.reduce((sum, item) => sum + item.putPremium, 0);
+
+  return {
+    updatedAt: new Date().toISOString(),
+    window: "T-3",
+    poolName: "自选池",
+    source: "fallback",
+    summary: {
+      unusualSymbolCount: symbols.length,
+      newUnusualSymbols: Math.max(1, Math.ceil(symbols.length / 4)),
+      premiumCallPutRatio: putPremium > 0 ? Number((callPremium / putPremium).toFixed(2)) : null,
+      persistentSymbolRate: Number((symbols.filter((item) => item.activeDays >= 2).length / Math.max(1, symbols.length)).toFixed(2)),
+      zeroDteShare: null
+    },
+    symbols
+  };
+}
+
 function App() {
   const [activeView, setActiveView] = useState<ViewId>("research");
   const [researchMode, setResearchMode] = useState<ResearchMode>("overview");
@@ -464,11 +536,14 @@ function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [overviewData, setOverviewData] = useState<MarketOverviewData | null>(null);
   const [newsPageData, setNewsPageData] = useState<NewsPageData | null>(null);
+  const [optionsHomeData, setOptionsHomeData] = useState<OptionsHomeData | null>(null);
   const [positionsData, setPositionsData] = useState<PositionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [newsPageLoading, setNewsPageLoading] = useState(false);
   const [newsPageError, setNewsPageError] = useState<string | null>(null);
+  const [optionsHomeLoading, setOptionsHomeLoading] = useState(false);
+  const [optionsHomeError, setOptionsHomeError] = useState<string | null>(null);
   const [watchlistVersion, setWatchlistVersion] = useState(0);
   const [usSymbols, setUsSymbols] = useState<SymbolSearchResult[]>([]);
   const [positionsLoading, setPositionsLoading] = useState(false);
@@ -687,6 +762,45 @@ function App() {
   }, [activeView, watchlistVersion]);
 
   useEffect(() => {
+    if (activeView !== "options") {
+      return;
+    }
+
+    let cancelled = false;
+    setOptionsHomeLoading(true);
+    setOptionsHomeError(null);
+
+    const hasDesktopBridge = Boolean(window.tradeAssistant);
+    const optionsPromise = hasDesktopBridge
+      ? window.tradeAssistant!.getOptionsHome()
+      : Promise.resolve(buildBrowserFallbackOptionsHome());
+
+    optionsPromise
+      .then((payload) => {
+        if (!cancelled) {
+          setOptionsHomeData(payload);
+          setClientState(hasDesktopBridge ? "本地就绪" : "浏览器预览");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setOptionsHomeData(buildBrowserFallbackOptionsHome());
+          setOptionsHomeError(error instanceof Error ? error.message : "期权异动加载失败");
+          setClientState("不可用");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setOptionsHomeLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, watchlistVersion]);
+
+  useEffect(() => {
     if (!window.tradeAssistant) {
       return;
     }
@@ -833,7 +947,9 @@ function App() {
           <button className={`nav-item ${activeView === "news" ? "active" : ""}`} onClick={() => setActiveView("news")}>
             <Newspaper size={18} /> 新闻情绪
           </button>
-          <button className="nav-item"><Activity size={18} /> 期权异动</button>
+          <button className={`nav-item ${activeView === "options" ? "active" : ""}`} onClick={() => setActiveView("options")}>
+            <Activity size={18} /> 期权异动
+          </button>
           <button className="nav-item"><BrainCircuit size={18} /> AI 策略</button>
           <button className="nav-item"><Database size={18} /> 数据源</button>
         </nav>
@@ -1092,6 +1208,16 @@ function App() {
             data={newsPageData}
             loading={newsPageLoading}
             error={newsPageError}
+            onOpenDetail={(nextSymbol) => {
+              setActiveView("research");
+              openResearchDetail(nextSymbol);
+            }}
+          />
+        ) : activeView === "options" ? (
+          <OptionsActivityHome
+            data={optionsHomeData}
+            loading={optionsHomeLoading}
+            error={optionsHomeError}
             onOpenDetail={(nextSymbol) => {
               setActiveView("research");
               openResearchDetail(nextSymbol);
@@ -1599,6 +1725,51 @@ function formatSignedPercent(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
+function formatMoney(value?: number | null) {
+  if (!Number.isFinite(value ?? NaN)) {
+    return "--";
+  }
+
+  const number = Number(value);
+  if (Math.abs(number) >= 1_000_000) {
+    return `$${(number / 1_000_000).toFixed(1)}M`;
+  }
+  if (Math.abs(number) >= 1_000) {
+    return `$${(number / 1_000).toFixed(1)}K`;
+  }
+  return `$${number.toFixed(0)}`;
+}
+
+function formatNullableRatio(value?: number | null) {
+  return Number.isFinite(value ?? NaN) ? `${Number(value).toFixed(2)}x` : "--";
+}
+
+function formatNullablePercent(value?: number | null) {
+  return Number.isFinite(value ?? NaN) ? `${(Number(value) * 100).toFixed(0)}%` : "--";
+}
+
+function formatDirection(value: OptionsActivitySymbol["direction"]) {
+  const labels = {
+    bullish: "偏多",
+    bearish: "偏空",
+    volatility: "波动率",
+    hedge: "对冲",
+    mixed: "混合"
+  };
+  return labels[value] ?? "混合";
+}
+
+function formatEventRisk(value: OptionsActivitySymbol["eventRisk"]) {
+  const labels = {
+    earnings: "财报风险",
+    macro: "宏观事件",
+    product: "产品事件",
+    legal: "法务风险",
+    none: "无明显事件"
+  };
+  return labels[value] ?? "无明显事件";
+}
+
 function formatMetricText(value?: string | number | null) {
   if (value === undefined || value === null || value === "") {
     return "--";
@@ -1724,6 +1895,185 @@ function formatTime(value?: string) {
 
 function getNewsKey(item: NewsItem) {
   return item.url || `${item.title}:${item.time}`;
+}
+
+function OptionsActivityHome({
+  data,
+  loading,
+  error,
+  onOpenDetail
+}: {
+  data: OptionsHomeData | null;
+  loading: boolean;
+  error: string | null;
+  onOpenDetail: (symbol: string) => void;
+}) {
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  const symbols = data?.symbols ?? [];
+  const selected = symbols.find((item) => item.symbol === selectedSymbol) ?? symbols[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedSymbol && symbols.length > 0) {
+      setSelectedSymbol(symbols[0].symbol);
+    }
+  }, [selectedSymbol, symbols]);
+
+  const metrics = [
+    { label: "异动标的", value: loading ? "--" : String(data?.summary.unusualSymbolCount ?? 0), hint: "T-3 score>阈值" },
+    { label: "新增异动", value: loading ? "--" : String(data?.summary.newUnusualSymbols ?? 0), hint: "vs 前窗口" },
+    { label: "Call/Put 溢价", value: loading ? "--" : formatNullableRatio(data?.summary.premiumCallPutRatio), hint: "premium ratio" },
+    { label: "持续异动", value: loading ? "--" : formatNullablePercent(data?.summary.persistentSymbolRate), hint: "2日以上" }
+  ];
+
+  return (
+    <section className="options-home">
+      <header className="options-topbar">
+        <div>
+          <span className="eyebrow">Options Review</span>
+          <h1>期权异动复盘</h1>
+          <p>{data?.poolName ?? "自选池"} · {data?.window ?? "T-3"} · {formatTime(data?.updatedAt)}</p>
+        </div>
+        <div className="options-controls">
+          <div className="segmented-control" aria-label="时间窗口">
+            <button className="active">T-3</button>
+            <button>T-1</button>
+            <button>T-5</button>
+          </div>
+          <button className="icon-button" aria-label="刷新期权异动">
+            <RefreshCw size={18} />
+          </button>
+        </div>
+      </header>
+
+      {error ? <p className="view-error">{error}</p> : null}
+
+      <div className="options-kpi-strip">
+        {metrics.map((metric) => (
+          <div className="options-kpi" key={metric.label}>
+            <span>{metric.label}</span>
+            <strong>{metric.value}</strong>
+            <em>{metric.hint}</em>
+          </div>
+        ))}
+      </div>
+
+      <div className="options-main-grid">
+        <section className="options-ranking">
+          <div className="section-heading compact">
+            <div>
+              <span>Ranking</span>
+              <h2>标的异动排名</h2>
+            </div>
+            <strong className={`data-source ${data?.source === "massive" ? "live" : ""}`}>
+              {data?.source === "massive" ? "Massive" : "Preview"}
+            </strong>
+          </div>
+
+          <div className="options-table">
+            <div className="options-table-head">
+              <span>Ticker</span>
+              <span>Score</span>
+              <span>Premium</span>
+              <span>Vol/OI</span>
+              <span>Bias</span>
+              <span>Days</span>
+            </div>
+            {loading ? (
+              Array.from({ length: 5 }, (_, index) => <div className="options-row skeleton" key={index} />)
+            ) : symbols.length === 0 ? (
+              <p className="empty-state">暂无期权异动数据。</p>
+            ) : symbols.map((item) => (
+              <button
+                className={`options-row ${selected?.symbol === item.symbol ? "selected" : ""}`}
+                key={item.symbol}
+                onClick={() => setSelectedSymbol(item.symbol)}
+              >
+                <span>
+                  <strong>{item.symbol}</strong>
+                  <small>{item.name}</small>
+                </span>
+                <b>{item.score}</b>
+                <span>{formatMoney(item.totalPremium)}</span>
+                <span>{formatNullableRatio(item.volumeOpenInterestRatio)}</span>
+                <em className={`direction-chip ${item.direction}`}>{formatDirection(item.direction)}</em>
+                <span>{item.activeDays}/3</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <aside className="options-insight">
+          {selected ? (
+            <>
+              <div className="insight-symbol-header">
+                <div>
+                  <span>Selected</span>
+                  <h2>{selected.symbol}</h2>
+                  <p>{selected.name}</p>
+                </div>
+                <button className="ghost-button" onClick={() => onOpenDetail(selected.symbol)}>
+                  股票详情
+                </button>
+              </div>
+
+              <div className="options-snapshot-grid">
+                <div><span>股价</span><strong>{selected.price ? `$${selected.price.toFixed(2)}` : "--"}</strong></div>
+                <div><span>3日涨跌</span><strong>{formatSignedPercent(selected.priceChange3d ?? 0)}</strong></div>
+                <div><span>相对量</span><strong>{formatNullableRatio(selected.relativeVolume)}</strong></div>
+                <div><span>IV变化</span><strong>{formatSignedPercent((selected.ivChange ?? 0) * 100)}</strong></div>
+              </div>
+
+              <div className="interpretation-tags">
+                <span>{formatDirection(selected.direction)}</span>
+                <span>{selected.eventRisk === "none" ? "无明显事件" : formatEventRisk(selected.eventRisk)}</span>
+                <span>{selected.activeDays >= 2 ? "连续异动" : "单日放量"}</span>
+              </div>
+
+              <div className="contract-list">
+                {selected.contracts.map((contract) => (
+                  <div className="contract-card" key={contract.contractSymbol}>
+                    <div>
+                      <strong>{contract.type.toUpperCase()} {contract.strike}</strong>
+                      <span>{contract.expiration}</span>
+                    </div>
+                    <div>
+                      <b>{formatMoney(contract.premium)}</b>
+                      <span>Vol {contract.volume.toLocaleString()} · OI {contract.openInterest?.toLocaleString() ?? "--"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="empty-state">选择一个标的查看合约解释。</p>
+          )}
+        </aside>
+      </div>
+
+      <section className="options-timeline">
+        <div className="section-heading compact">
+          <div>
+            <span>Persistence</span>
+            <h2>三日连续性</h2>
+          </div>
+        </div>
+        <div className="timeline-grid">
+          {symbols.slice(0, 8).map((item) => (
+            <div className="timeline-row" key={item.symbol}>
+              <strong>{item.symbol}</strong>
+              {item.timeline.map((day) => (
+                <div className={`timeline-cell ${day.direction}`} key={`${item.symbol}-${day.date}`}>
+                  <span>{day.date.slice(5)}</span>
+                  <b>{day.score}</b>
+                  <em>{formatMoney(day.premium)}</em>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </section>
+    </section>
+  );
 }
 
 function NewsSentimentView({

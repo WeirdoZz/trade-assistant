@@ -6,6 +6,7 @@ interface Window {
     getDashboard: (symbol: string) => Promise<DashboardData>;
     getMarketOverview: () => Promise<MarketOverviewData>;
     getNewsPage: () => Promise<NewsPageData>;
+    getOptionsHome: () => Promise<OptionsHomeData>;
     getUsSymbols: () => Promise<SymbolSearchResult[]>;
     addWatchlistItem: (item: WatchlistItem) => Promise<WatchlistItem[]>;
     removeWatchlistItem: (symbol: string) => Promise<WatchlistItem[]>;
@@ -103,6 +104,62 @@ type NewsPageData = {
   };
   topics: NewsTopicBucket[];
   watchlist: WatchlistNewsBucket[];
+};
+
+type OptionsHomeData = {
+  updatedAt: string;
+  window: "T-1" | "T-3" | "T-5";
+  poolName: string;
+  source: "massive" | "fallback";
+  summary: OptionsHomeSummary;
+  symbols: OptionsActivitySymbol[];
+};
+
+type OptionsHomeSummary = {
+  unusualSymbolCount: number;
+  newUnusualSymbols: number;
+  premiumCallPutRatio: number | null;
+  persistentSymbolRate: number | null;
+  zeroDteShare: number | null;
+};
+
+type OptionsActivitySymbol = {
+  symbol: string;
+  name: string;
+  score: number;
+  totalPremium: number;
+  callPremium: number;
+  putPremium: number;
+  volumeOpenInterestRatio: number | null;
+  ivChange: number | null;
+  direction: "bullish" | "bearish" | "volatility" | "hedge" | "mixed";
+  activeDays: number;
+  topExpiry: string | null;
+  eventRisk: "earnings" | "macro" | "product" | "legal" | "none";
+  price: number | null;
+  priceChange3d: number | null;
+  relativeVolume: number | null;
+  contracts: OptionsRepresentativeContract[];
+  timeline: OptionsActivityDay[];
+};
+
+type OptionsRepresentativeContract = {
+  contractSymbol: string;
+  type: "call" | "put";
+  strike: number;
+  expiration: string;
+  premium: number;
+  volume: number;
+  openInterest: number | null;
+  sideEstimate: "ask" | "bid" | "midpoint" | "unknown";
+  impliedVolatility: number | null;
+};
+
+type OptionsActivityDay = {
+  date: string;
+  score: number;
+  premium: number;
+  direction: "bullish" | "bearish" | "volatility" | "hedge" | "mixed";
 };
 
 type SecurityRatings = {
