@@ -1770,6 +1770,41 @@ function formatEventRisk(value: OptionsActivitySymbol["eventRisk"]) {
   return labels[value] ?? "无明显事件";
 }
 
+function buildOptionsPlainReadout(item: OptionsActivitySymbol) {
+  const directionText = formatDirection(item.direction);
+  const continuity = item.activeDays >= 2 ? `连续 ${item.activeDays} 天出现` : "主要是单日放量";
+  const volOi = item.volumeOpenInterestRatio
+    ? `Vol/OI ${item.volumeOpenInterestRatio.toFixed(2)}x`
+    : "Vol/OI 暂无";
+  return `${item.symbol} 近三日期权异动${directionText}，${continuity}，估算资金 ${formatMoney(item.totalPremium)}，${volOi}。`;
+}
+
+function buildOptionsNextStep(item: OptionsActivitySymbol) {
+  if (item.direction === "mixed") {
+    return "方向不干净，先看合约是否分散，再查是否有财报、新闻或大盘事件。";
+  }
+  if (item.direction === "volatility") {
+    return "更像押波动，不一定押涨跌；优先检查财报日、IV变化和跨式/宽跨式痕迹。";
+  }
+  if (item.direction === "hedge") {
+    return "可能是保护性仓位，不要直接当看空；需要结合正股持仓和成交价靠近 bid/ask 判断。";
+  }
+  if ((item.volumeOpenInterestRatio ?? 0) >= 2 && item.activeDays >= 2) {
+    return "信号质量较好：资金、放量和连续性同时出现，适合进入股票详情做二次确认。";
+  }
+  return "信号还需要确认：优先看是否只有一张合约贡献大部分资金。";
+}
+
+function formatContractMeaning(contract: OptionsRepresentativeContract) {
+  const typeText = contract.type === "call" ? "看涨" : "看跌";
+  const sideText = contract.sideEstimate === "ask"
+    ? "更像主动买入"
+    : contract.sideEstimate === "bid"
+      ? "更像主动卖出"
+      : "成交方向不明";
+  return `${typeText} · ${sideText}`;
+}
+
 function formatMetricText(value?: string | number | null) {
   if (value === undefined || value === null || value === "") {
     return "--";
@@ -1919,10 +1954,10 @@ function OptionsActivityHome({
   }, [selectedSymbol, symbols]);
 
   const metrics = [
-    { label: "异动标的", value: loading ? "--" : String(data?.summary.unusualSymbolCount ?? 0), hint: "T-3 score>阈值" },
-    { label: "新增异动", value: loading ? "--" : String(data?.summary.newUnusualSymbols ?? 0), hint: "vs 前窗口" },
-    { label: "Call/Put 溢价", value: loading ? "--" : formatNullableRatio(data?.summary.premiumCallPutRatio), hint: "premium ratio" },
-    { label: "持续异动", value: loading ? "--" : formatNullablePercent(data?.summary.persistentSymbolRate), hint: "2日以上" }
+    { label: "异动标的", value: loading ? "--" : String(data?.summary.unusualSymbolCount ?? 0), hint: "近3日有明显期权放量的股票数", guide: "先从这里判断自选池今天热不热。" },
+    { label: "新增异动", value: loading ? "--" : String(data?.summary.newUnusualSymbols ?? 0), hint: "这次才进入异动榜的股票", guide: "新增多，说明资金兴趣正在切换。" },
+    { label: "Call/Put 溢价", value: loading ? "--" : formatNullableRatio(data?.summary.premiumCallPutRatio), hint: "Call成交金额 / Put成交金额", guide: "大于1偏看涨，小于1偏防守或看跌。" },
+    { label: "持续异动", value: loading ? "--" : formatNullablePercent(data?.summary.persistentSymbolRate), hint: "连续2天以上异动占比", guide: "越高越像持续布局，越低越像单日噪音。" }
   ];
 
   return (
@@ -1932,6 +1967,7 @@ function OptionsActivityHome({
           <span className="eyebrow">Options Review</span>
           <h1>期权异动复盘</h1>
           <p>{data?.poolName ?? "自选池"} · {data?.window ?? "T-3"} · {formatTime(data?.updatedAt)}</p>
+          <small>先看异动强度，再看方向是否干净，最后确认是否连续。这里不是买卖建议，只是帮你缩小复盘范围。</small>
         </div>
         <div className="options-controls">
           <div className="segmented-control" aria-label="时间窗口">
@@ -1953,6 +1989,7 @@ function OptionsActivityHome({
             <span>{metric.label}</span>
             <strong>{metric.value}</strong>
             <em>{metric.hint}</em>
+            <p>{metric.guide}</p>
           </div>
         ))}
       </div>
@@ -1971,12 +2008,12 @@ function OptionsActivityHome({
 
           <div className="options-table">
             <div className="options-table-head">
-              <span>Ticker</span>
-              <span>Score</span>
-              <span>Premium</span>
+              <span>股票</span>
+              <span title="异动强度分，越高越值得复盘。">强度</span>
+              <span title="期权成交金额估算，约等于价格 * 成交量 * 100。">资金</span>
               <span>Vol/OI</span>
-              <span>Bias</span>
-              <span>Days</span>
+              <span title="偏多/偏空/波动率/对冲/混合。">方向</span>
+              <span title="近3天里出现异动的天数。">连续</span>
             </div>
             {loading ? (
               Array.from({ length: 5 }, (_, index) => <div className="options-row skeleton" key={index} />)
@@ -2005,6 +2042,11 @@ function OptionsActivityHome({
         <aside className="options-insight">
           {selected ? (
             <>
+              <div className="plain-readout">
+                <strong>{buildOptionsPlainReadout(selected)}</strong>
+                <p>{buildOptionsNextStep(selected)}</p>
+              </div>
+
               <div className="insight-symbol-header">
                 <div>
                   <span>Selected</span>
@@ -2034,11 +2076,11 @@ function OptionsActivityHome({
                   <div className="contract-card" key={contract.contractSymbol}>
                     <div>
                       <strong>{contract.type.toUpperCase()} {contract.strike}</strong>
-                      <span>{contract.expiration}</span>
+                      <span>{contract.expiration} · {formatContractMeaning(contract)}</span>
                     </div>
                     <div>
                       <b>{formatMoney(contract.premium)}</b>
-                      <span>Vol {contract.volume.toLocaleString()} · OI {contract.openInterest?.toLocaleString() ?? "--"}</span>
+                      <span>成交 {contract.volume.toLocaleString()} · 未平仓 {contract.openInterest?.toLocaleString() ?? "--"}</span>
                     </div>
                   </div>
                 ))}
@@ -2055,6 +2097,7 @@ function OptionsActivityHome({
           <div>
             <span>Persistence</span>
             <h2>三日连续性</h2>
+            <p>看资金是不是连续出现：连续高分比单日爆量更值得复盘。</p>
           </div>
         </div>
         <div className="timeline-grid">

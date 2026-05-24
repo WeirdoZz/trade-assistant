@@ -1540,6 +1540,15 @@ button:disabled {
   font-size: 13px;
 }
 
+.options-topbar small {
+  display: block;
+  max-width: 680px;
+  margin-top: 8px;
+  color: #aebccd;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .options-controls,
 .segmented-control {
   display: flex;
@@ -1595,6 +1604,13 @@ button:disabled {
   margin: 8px 0 6px;
   color: #ffffff;
   font-size: 28px;
+}
+
+.options-kpi p {
+  margin: 8px 0 0;
+  color: #c3d0dc;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .options-main-grid {
@@ -1724,6 +1740,28 @@ button:disabled {
   background: rgba(6, 16, 24, 0.42);
 }
 
+.plain-readout {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(114, 211, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(114, 211, 255, 0.08);
+}
+
+.plain-readout strong {
+  display: block;
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.plain-readout p {
+  margin: 8px 0 0;
+  color: #c7eefd;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .insight-symbol-header {
   display: flex;
   align-items: flex-start;
@@ -1810,6 +1848,12 @@ button:disabled {
 
 .options-timeline {
   padding: 18px;
+}
+
+.options-timeline .section-heading p {
+  margin: 4px 0 0;
+  color: #8ea1b5;
+  font-size: 12px;
 }
 
 .timeline-grid {
