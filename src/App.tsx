@@ -25,6 +25,12 @@ import {
   WalletCards,
   Zap
 } from "lucide-react";
+import {
+  buildTradingViewWidgetConfig,
+  getTradingViewScriptSource,
+  getTradingViewSymbolUrl,
+  type TradingViewWidgetKind
+} from "./tradingView";
 
 type PricePoint = {
   date: string;
@@ -1070,6 +1076,56 @@ function App() {
                   <ChevronLeft size={16} /> 返回市场总览
                 </button>
 
+                <section className="tradingview-detail-grid">
+                  <div className="tradingview-detail-stack">
+                    <TradingViewWidget
+                      kind="symbol-info"
+                      symbol={symbol}
+                      theme={theme}
+                      className="tradingview-symbol-info"
+                    />
+                    <div className="tradingview-local-summary">
+                      <div>
+                        <span>本地快照</span>
+                        <strong>{data?.symbol ?? symbol}</strong>
+                      </div>
+                      <div className="tradingview-local-grid">
+                        {headlineMetrics.slice(0, 4).map((metric) => (
+                          <div key={metric.label}>
+                            <span>{metric.label}</span>
+                            <strong>{loading ? "--" : metric.value}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <TradingViewWidget
+                    kind="symbol-profile"
+                    symbol={symbol}
+                    theme={theme}
+                    className="tradingview-symbol-profile"
+                  />
+                </section>
+
+                <section className="tradingview-chart-panel">
+                  <TradingViewWidget
+                    kind="advanced-chart"
+                    symbol={symbol}
+                    theme={theme}
+                    className="tradingview-advanced-chart"
+                  />
+                </section>
+
+                <section className="tradingview-financials-row">
+                  <TradingViewWidget
+                    kind="financials"
+                    symbol={symbol}
+                    theme={theme}
+                    className="tradingview-financials"
+                    loadStrategy="visible"
+                  />
+                </section>
+
                 <section className="hero-band">
           <div>
             <div className="key-metrics-heading">
@@ -1291,6 +1347,111 @@ function App() {
         )}
       </section>
     </main>
+  );
+}
+
+function TradingViewWidget({
+  kind,
+  symbol,
+  theme,
+  className = "",
+  loadStrategy = "immediate"
+}: {
+  kind: TradingViewWidgetKind;
+  symbol: string;
+  theme: ThemeMode;
+  className?: string;
+  loadStrategy?: "immediate" | "visible";
+}) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [shouldLoad, setShouldLoad] = useState(loadStrategy === "immediate");
+  const config = useMemo(
+    () => buildTradingViewWidgetConfig(kind, symbol, theme),
+    [kind, symbol, theme]
+  );
+
+  useEffect(() => {
+    if (loadStrategy === "immediate") {
+      setShouldLoad(true);
+      return;
+    }
+
+    setShouldLoad(false);
+  }, [kind, loadStrategy, symbol, theme]);
+
+  useEffect(() => {
+    if (loadStrategy === "immediate" || shouldLoad) {
+      return;
+    }
+
+    const shell = shellRef.current;
+
+    if (!shell || typeof IntersectionObserver === "undefined") {
+      setShouldLoad(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setShouldLoad(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "360px 0px" }
+    );
+
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, [loadStrategy, shouldLoad]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    container.innerHTML = "";
+    if (!shouldLoad) {
+      return;
+    }
+
+    const widget = document.createElement("div");
+    widget.className = "tradingview-widget-container__widget";
+    container.appendChild(widget);
+
+    const script = document.createElement("script");
+    script.type = "text/javascript";
+    script.async = true;
+    script.src = getTradingViewScriptSource(kind);
+    script.text = JSON.stringify(config, null, 2);
+    container.appendChild(script);
+
+    return () => {
+      container.innerHTML = "";
+    };
+  }, [config, kind, shouldLoad]);
+
+  const copyrightLabel = kind === "advanced-chart"
+    ? `${symbol.toUpperCase()} stock chart`
+    : "Track all markets on TradingView";
+  const href = getTradingViewSymbolUrl(
+    symbol,
+    kind === "financials" ? "financials-overview/" : ""
+  );
+
+  return (
+    <div className={`tradingview-widget-shell ${className}`} ref={shellRef}>
+      <div className="tradingview-widget-container" ref={containerRef} />
+      <div className="tradingview-widget-copyright">
+        <a href={href} rel="noopener nofollow" target="_blank">
+          <span className="blue-text">{copyrightLabel}</span>
+        </a>
+        {kind === "advanced-chart" ? <span className="trademark"> by TradingView</span> : null}
+      </div>
+    </div>
   );
 }
 

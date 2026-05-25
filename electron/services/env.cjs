@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-function loadDotEnv(rootDir) {
+function loadDotEnv(rootDir, targetEnv = process.env) {
   const envPath = path.join(rootDir, ".env");
 
   if (!fs.existsSync(envPath)) {
@@ -25,8 +25,8 @@ function loadDotEnv(rootDir) {
     const rawValue = trimmed.slice(separator + 1).trim();
     const value = rawValue.replace(/^["']|["']$/g, "");
 
-    if (key && !(key in process.env)) {
-      process.env[key] = value;
+    if (key && !(key in targetEnv)) {
+      targetEnv[key] = value;
     }
   }
 }

@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("node:path");
+const { configureElectronProxy } = require("./services/electronProxy.cjs");
 const { FinnhubRealtime } = require("./services/finnhubRealtime.cjs");
 const { getDashboard, getMarketOverview, getNewsPage, fetchUsSymbols } = require("./services/marketData.cjs");
 const { getOptionsHome } = require("./services/optionsData.cjs");
@@ -12,10 +13,10 @@ const {
   startLongbridgeOAuth
 } = require("./services/longbridgeClient.cjs");
 
-const proxyServer = (process.env.TRADE_ASSISTANT_PROXY_SERVER || "").trim();
-if (proxyServer) {
-  app.commandLine.appendSwitch("proxy-server", proxyServer);
-}
+configureElectronProxy({
+  rootDir: path.join(__dirname, ".."),
+  appendSwitch: app.commandLine.appendSwitch.bind(app.commandLine)
+});
 
 const isDev = !app.isPackaged;
 const finnhubRealtime = new FinnhubRealtime();
