@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import {
   Activity,
@@ -12,7 +12,6 @@ import {
   Database,
   Gauge,
   LineChart,
-  MoreHorizontal,
   Newspaper,
   Plus,
   RefreshCw,
@@ -20,6 +19,8 @@ import {
   Settings2,
   ShieldAlert,
   Sparkles,
+  Moon,
+  Sun,
   TrendingUp,
   WalletCards,
   Zap
@@ -168,6 +169,24 @@ type InstitutionRating = {
   } | null;
 };
 
+const TRADINGVIEW_DEFAULT_SYMBOLS = [
+  "NASDAQ:AAPL",
+  "NASDAQ:ADBE",
+  "NASDAQ:NVDA",
+  "NASDAQ:TSLA"
+];
+const TRADINGVIEW_INDEX_SYMBOLS = [
+  "AMEX:SPY",
+  "NASDAQ:QQQ",
+  "AMEX:DIA"
+];
+const TRADINGVIEW_TIMEFRAMES = [
+  { label: "1D", value: "1D" },
+  { label: "7D", value: "7D" },
+  { label: "1M", value: "1M" },
+  { label: "3M", value: "3M" },
+  { label: "1Y", value: "12M" }
+] as const;
 type SecurityCalcInfo = {
   symbol: string | null;
   lastDone: string | null;
@@ -213,6 +232,11 @@ type SecurityStaticInfo = {
 
 type ViewId = "research" | "news" | "positions" | "options";
 type ResearchMode = "overview" | "detail";
+type ThemeMode = "light" | "dark";
+type TradingViewSymbolLink = {
+  tvSymbol: string;
+  appSymbol: string;
+};
 
 const watchlist = [
   { symbol: "NVDA", label: "NVIDIA", change: "+2.84%", state: "强势突破" },
@@ -222,6 +246,20 @@ const watchlist = [
 ];
 
 const browserWatchlistKey = "trade-assistant.watchlist";
+const themeStorageKey = "trade-assistant.theme";
+
+function getInitialTheme(): ThemeMode {
+  if (typeof window === "undefined") {
+    return "dark";
+  }
+
+  const stored = window.localStorage.getItem(themeStorageKey);
+  if (stored === "light" || stored === "dark") {
+    return stored;
+  }
+
+  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
 
 function getBrowserWatchlist(): WatchlistItem[] {
   try {
@@ -530,6 +568,7 @@ function buildBrowserFallbackOptionsHome(watchlistItems = getBrowserWatchlist())
 function App() {
   const [activeView, setActiveView] = useState<ViewId>("research");
   const [researchMode, setResearchMode] = useState<ResearchMode>("overview");
+  const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme());
   const [broker, setBroker] = useState<BrokerId>("longbridge");
   const [symbol, setSymbol] = useState("NVDA");
   const [query, setQuery] = useState("NVDA");
@@ -554,6 +593,12 @@ function App() {
   const [oauthError, setOauthError] = useState<string | null>(null);
   const [finnhubStatus, setFinnhubStatus] = useState<FinnhubStatus | null>(null);
   const [expandedNewsKey, setExpandedNewsKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem(themeStorageKey, theme);
+  }, [theme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -825,28 +870,29 @@ function App() {
     void window.tradeAssistant.subscribeFinnhub(symbol);
   }, [activeView, researchMode, symbol]);
 
-  const chartOption = useMemo(() => {
-    const prices = data?.prices ?? [];
-    return {
-      grid: { top: 24, left: 48, right: 24, bottom: 38 },
-      tooltip: {
-        trigger: "axis",
-        backgroundColor: "#101820",
-        borderColor: "#2a3948",
-        textStyle: { color: "#f4f7fb" }
-      },
-      xAxis: {
-        type: "category",
-        data: prices.map((point) => point.date.slice(5)),
-        axisLine: { lineStyle: { color: "#354454" } },
-        axisLabel: { color: "#91a1b3" }
-      },
-      yAxis: {
-        type: "value",
-        scale: true,
-        splitLine: { lineStyle: { color: "#1d2a36" } },
-        axisLabel: { color: "#91a1b3" }
-      },
+	  const chartOption = useMemo(() => {
+	    const prices = data?.prices ?? [];
+      const isLight = theme === "light";
+	    return {
+	      grid: { top: 24, left: 48, right: 24, bottom: 38 },
+	      tooltip: {
+	        trigger: "axis",
+	        backgroundColor: isLight ? "#ffffff" : "#101820",
+	        borderColor: isLight ? "#d8e0ea" : "#2a3948",
+	        textStyle: { color: isLight ? "#111827" : "#f4f7fb" }
+	      },
+	      xAxis: {
+	        type: "category",
+	        data: prices.map((point) => point.date.slice(5)),
+	        axisLine: { lineStyle: { color: isLight ? "#d8e0ea" : "#354454" } },
+	        axisLabel: { color: isLight ? "#667085" : "#91a1b3" }
+	      },
+	      yAxis: {
+	        type: "value",
+	        scale: true,
+	        splitLine: { lineStyle: { color: isLight ? "#eef2f7" : "#1d2a36" } },
+	        axisLabel: { color: isLight ? "#667085" : "#91a1b3" }
+	      },
       series: [
         {
           name: "Close",
@@ -871,7 +917,7 @@ function App() {
         }
       ]
     };
-  }, [data]);
+	  }, [data, theme]);
   const staticInfo = data?.staticInfo;
   const calcInfo = data?.calcInfo;
   const headlineMetrics = getHeadlineKeyMetrics(calcInfo);
@@ -925,7 +971,7 @@ function App() {
   };
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-theme={theme}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
@@ -953,6 +999,16 @@ function App() {
           <button className="nav-item"><BrainCircuit size={18} /> AI 策略</button>
           <button className="nav-item"><Database size={18} /> 数据源</button>
         </nav>
+
+        <button
+          className="theme-toggle"
+          type="button"
+          onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+          aria-label={theme === "dark" ? "切换到白天模式" : "切换到夜间模式"}
+        >
+          {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+          {theme === "dark" ? "白天模式" : "夜间模式"}
+        </button>
 
         <section className="source-panel">
           <div className="panel-title">
@@ -1000,12 +1056,12 @@ function App() {
             </header>
 
             {researchMode === "overview" ? (
-              <MarketOverview
-                data={overviewData}
-                loading={overviewLoading}
-                onOpenDetail={openResearchDetail}
+	              <MarketOverview
+	                data={overviewData}
+	                loading={overviewLoading}
+                  theme={theme}
+	                onOpenDetail={openResearchDetail}
                 onAddWatchlist={addToWatchlist}
-                onRemoveWatchlist={removeFromWatchlist}
                 symbols={usSymbols}
               />
             ) : (
@@ -1457,20 +1513,32 @@ function mergeOverviewTrade(current: MarketOverviewData | null, trade: FinnhubTr
 function MarketOverview({
   data,
   loading,
+  theme,
   onOpenDetail,
   onAddWatchlist,
-  onRemoveWatchlist,
   symbols
 }: {
   data: MarketOverviewData | null;
   loading: boolean;
+  theme: ThemeMode;
   onOpenDetail: (symbol: string) => void;
   onAddWatchlist: (item: WatchlistItem) => Promise<void>;
-  onRemoveWatchlist: (symbol: string) => Promise<void>;
   symbols: SymbolSearchResult[];
 }) {
   const watchCards = data?.watchlist ?? [];
+  const [timeFrame, setTimeFrame] = useState<(typeof TRADINGVIEW_TIMEFRAMES)[number]["value"]>("1D");
   const watchSymbols = useMemo(() => new Set(watchCards.map((card) => card.symbol)), [watchCards]);
+  const tradingViewSymbolLinks = useMemo(() => (
+    watchCards
+      .map((card) => ({
+        tvSymbol: toTradingViewSymbol(card.symbol),
+        appSymbol: card.symbol
+      }))
+      .filter((item) => item.tvSymbol)
+  ), [watchCards]);
+  const tradingViewSymbols = useMemo(() => (
+    tradingViewSymbolLinks.map((item) => item.tvSymbol)
+  ), [tradingViewSymbolLinks]);
 
   return (
     <>
@@ -1485,7 +1553,8 @@ function MarketOverview({
         </div>
       </section>
 
-      <section className="overview-section">
+      <section className="overview-section watchlist-surface">
+        <TradingViewIndexStrip theme={theme} />
         <div className="section-heading">
           <div>
             <span>Watchlist</span>
@@ -1497,18 +1566,150 @@ function MarketOverview({
             symbols={symbols}
           />
         </div>
-        <div className="market-card-grid watch">
-          {watchCards.map((card) => (
-            <MarketSummaryCard
-              card={card}
-              key={card.symbol}
-              onOpenDetail={onOpenDetail}
-              onRemove={onRemoveWatchlist}
-            />
-          ))}
-        </div>
+        <TradingViewMarketSummary
+          symbols={tradingViewSymbols}
+          loading={loading}
+          theme={theme}
+          timeFrame={timeFrame}
+          onTimeFrameChange={setTimeFrame}
+          onOpenDetail={onOpenDetail}
+          symbolLinks={tradingViewSymbolLinks}
+        />
       </section>
     </>
+  );
+}
+
+function TradingViewIndexStrip({ theme }: { theme: ThemeMode }) {
+  const symbolSectors = JSON.stringify([
+    {
+      sectionName: "Indices",
+      symbols: TRADINGVIEW_INDEX_SYMBOLS
+    }
+  ]);
+
+  return (
+    <section className="tradingview-index-strip" aria-label="三大指数">
+      {createElement("tv-market-summary", {
+        "symbol-sectors": symbolSectors,
+        "show-time-range": "",
+        direction: "horizontal",
+        "item-size": "compact",
+        theme,
+        mode: "custom"
+      })}
+    </section>
+  );
+}
+
+function TradingViewMarketSummary({
+  symbols,
+  loading,
+  theme,
+  timeFrame,
+  onTimeFrameChange,
+  onOpenDetail,
+  symbolLinks
+}: {
+  symbols: string[];
+  loading: boolean;
+  theme: ThemeMode;
+  timeFrame: (typeof TRADINGVIEW_TIMEFRAMES)[number]["value"];
+  onTimeFrameChange: (value: (typeof TRADINGVIEW_TIMEFRAMES)[number]["value"]) => void;
+  onOpenDetail: (symbol: string) => void;
+  symbolLinks: TradingViewSymbolLink[];
+}) {
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const marketSymbols = symbols.length > 0 ? symbols : TRADINGVIEW_DEFAULT_SYMBOLS;
+  const widgetContentHeight = Math.max(360, 180 + marketSymbols.length * 72);
+  const widgetViewportHeight = Math.min(widgetContentHeight, 720);
+  const symbolSectors = JSON.stringify([
+    {
+      sectionName: "Watchlist",
+      symbols: marketSymbols
+    }
+  ]);
+  const symbolLookup = useMemo(() => {
+    const lookup = new Map<string, string>();
+    const add = (key: string, value: string) => {
+      const normalized = key.trim().toUpperCase();
+      if (normalized) {
+        lookup.set(normalized, value);
+      }
+    };
+
+    for (const item of symbolLinks) {
+      add(item.tvSymbol, item.appSymbol);
+      const [, ticker] = item.tvSymbol.split(":");
+      if (ticker) {
+        add(ticker, item.appSymbol);
+      }
+    }
+
+    return lookup;
+  }, [symbolLinks]);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) {
+      return;
+    }
+
+    const handleLinkOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ context?: { symbol?: string } }>).detail;
+      const tvSymbol = detail?.context?.symbol?.trim().toUpperCase();
+      if (!tvSymbol) {
+        return;
+      }
+
+      event.preventDefault();
+      const [, ticker] = tvSymbol.split(":");
+      onOpenDetail(symbolLookup.get(tvSymbol) ?? (ticker || tvSymbol));
+    };
+
+    frame.addEventListener("tv-link-open", handleLinkOpen);
+    return () => frame.removeEventListener("tv-link-open", handleLinkOpen);
+  }, [onOpenDetail, symbolLookup]);
+
+  return (
+    <section
+      className="tradingview-watchlist-panel"
+      aria-busy={loading}
+      style={{
+        "--tv-watchlist-height": `${widgetViewportHeight}px`,
+        "--tv-watchlist-content-height": `${widgetContentHeight}px`
+      } as React.CSSProperties}
+    >
+      <div className="watchlist-panel-head">
+        <div>
+          <span>TradingView</span>
+          <h3>行情概览</h3>
+        </div>
+        <div className="timeframe-control" aria-label="切换行情周期">
+          {TRADINGVIEW_TIMEFRAMES.map((item) => (
+            <button
+              className={timeFrame === item.value ? "active" : ""}
+              type="button"
+              key={item.value}
+              onClick={() => onTimeFrameChange(item.value)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="tradingview-widget-frame" ref={frameRef}>
+        {createElement("tv-market-summary", {
+          key: `${theme}:${timeFrame}:${symbolSectors}`,
+          "symbol-sectors": symbolSectors,
+          "time-frame": timeFrame,
+          "show-time-range": "",
+          "layout-mode": "grid",
+          theme,
+          mode: "custom"
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -1536,6 +1737,21 @@ function WatchlistSearch({
         item.symbol.includes(normalized) ||
         item.name.toUpperCase().includes(normalized)
       ))
+      .sort((left, right) => {
+        const rank = (item: SymbolSearchResult) => {
+          const symbol = item.symbol.toUpperCase();
+          const name = item.name.toUpperCase();
+
+          if (symbol === normalized) return 0;
+          if (symbol.startsWith(normalized)) return 1;
+          if (symbol.includes(normalized)) return 2;
+          if (name.startsWith(normalized)) return 3;
+          if (name.includes(normalized)) return 4;
+          return 5;
+        };
+
+        return rank(left) - rank(right) || left.symbol.localeCompare(right.symbol);
+      })
       .slice(0, 10);
   }, [symbols, trimmedQuery]);
 
@@ -1599,122 +1815,70 @@ function WatchlistSearch({
   );
 }
 
-function MarketSummaryCard({
-  card,
-  onOpenDetail,
-  onRemove
-}: {
-  card: MarketCard;
-  onOpenDetail: (symbol: string) => void;
-  onRemove: (symbol: string) => Promise<void>;
-}) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [removing, setRemoving] = useState(false);
+function toTradingViewSymbol(symbol: string) {
+  const normalized = symbol.trim().toUpperCase();
+  if (!normalized) {
+    return "";
+  }
 
-  const removeCard = async () => {
-    setRemoving(true);
-    try {
-      await onRemove(card.symbol);
-      setMenuOpen(false);
-    } finally {
-      setRemoving(false);
-    }
+  if (normalized.includes(":")) {
+    return normalized;
+  }
+
+  const suffixMap: Record<string, string> = {
+    AS: "EURONEXT",
+    AT: "ATHEX",
+    AX: "ASX",
+    BA: "BCBA",
+    BK: "SET",
+    BO: "BSE",
+    BR: "EURONEXT",
+    CO: "OMXCOP",
+    DE: "XETR",
+    F: "FWB",
+    HE: "OMXHEX",
+    HK: "HKEX",
+    IL: "LSE",
+    IS: "BIST",
+    JK: "IDX",
+    JO: "JSE",
+    KL: "MYX",
+    KQ: "KRX",
+    KS: "KRX",
+    L: "LSE",
+    LS: "EURONEXT",
+    MC: "BME",
+    MI: "MIL",
+    MX: "BMV",
+    NS: "NSE",
+    NZ: "NZX",
+    OL: "OSL",
+    PA: "EURONEXT",
+    PR: "PSE",
+    SA: "BMFBOVESPA",
+    SI: "SGX",
+    SS: "SSE",
+    ST: "OMXSTO",
+    SW: "SIX",
+    SZ: "SZSE",
+    T: "TSE",
+    TA: "TASE",
+    TO: "TSX",
+    TW: "TWSE",
+    TWO: "TPEX",
+    V: "TSXV",
+    VI: "VIE",
+    WA: "GPW"
   };
-
-  return (
-    <article
-      className={`market-summary-card ${card.dayChange.percent >= 0 ? "positive" : "negative"}`}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setMenuOpen(false);
-        }
-      }}
-    >
-      <button className="market-card-action" type="button" onClick={() => onOpenDetail(card.symbol)}>
-        <div className="market-card-head">
-          <div>
-            <strong>{card.symbol}</strong>
-            <span>{card.name}</span>
-          </div>
-          <ChangeText change={card.dayChange} />
-        </div>
-        <div className="market-price-row">
-          <b>{formatPrice(card)}</b>
-          <span>今日 {formatSigned(card.dayChange.amount)} / {formatSignedPercent(card.dayChange.percent)}</span>
-        </div>
-        <Sparkline values={card.sparkline} positive={card.dayChange.percent >= 0} />
-        <div className="period-grid">
-          <PeriodCell label="5日" value={card.performance["5d"]} />
-          <PeriodCell label="10日" value={card.performance["10d"]} />
-          <PeriodCell label="15日" value={card.performance["15d"]} />
-        </div>
-      </button>
-      <button
-        className="market-card-menu-button"
-        type="button"
-        aria-label={`${card.symbol} 更多操作`}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        onClick={() => setMenuOpen((open) => !open)}
-      >
-        <MoreHorizontal size={18} />
-      </button>
-      {menuOpen ? (
-        <div className="market-card-menu" role="menu">
-          <button type="button" role="menuitem" onClick={removeCard} disabled={removing}>
-            Remove
-          </button>
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
-function PeriodCell({ label, value }: { label: string; value: PeriodReturn }) {
-  return (
-    <div className={value.percent >= 0 ? "period-cell positive" : "period-cell negative"}>
-      <span>{label}</span>
-      <strong>{formatSigned(value.amount)}</strong>
-      <b>{formatSignedPercent(value.percent)}</b>
-    </div>
-  );
-}
-
-function ChangeText({ change }: { change: PeriodReturn }) {
-  return (
-    <span className={`change-text ${change.percent >= 0 ? "positive" : "negative"}`}>
-      {formatSigned(change.amount)} / {formatSignedPercent(change.percent)}
-    </span>
-  );
-}
-
-function Sparkline({ values, positive }: { values: number[]; positive: boolean }) {
-  if (values.length < 2) {
-    return <div className="sparkline" />;
+  const suffixes = Object.keys(suffixMap).sort((left, right) => right.length - left.length);
+  for (const suffix of suffixes) {
+    const token = `.${suffix}`;
+    if (normalized.endsWith(token)) {
+      return `${suffixMap[suffix]}:${normalized.slice(0, -token.length)}`;
+    }
   }
 
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const points = values.map((value, index) => {
-    const x = (index / (values.length - 1)) * 100;
-    const y = 42 - ((value - min) / range) * 34;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  }).join(" ");
-
-  return (
-    <svg className="sparkline" viewBox="0 0 100 48" preserveAspectRatio="none" aria-hidden="true">
-      <polyline points={points} fill="none" stroke={positive ? "#3ddc97" : "#ff8b7f"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function formatPrice(card: MarketCard) {
-  if (card.kind === "index") {
-    return card.price.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  }
-
-  return `$${card.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  return normalized;
 }
 
 function formatSigned(value: number) {

@@ -12,6 +12,11 @@ const {
   startLongbridgeOAuth
 } = require("./services/longbridgeClient.cjs");
 
+const proxyServer = (process.env.TRADE_ASSISTANT_PROXY_SERVER || "").trim();
+if (proxyServer) {
+  app.commandLine.appendSwitch("proxy-server", proxyServer);
+}
+
 const isDev = !app.isPackaged;
 const finnhubRealtime = new FinnhubRealtime();
 let watchlistStore = null;
