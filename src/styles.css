@@ -905,6 +905,7 @@ button:disabled {
 }
 
 .tradingview-chart-panel,
+.tradingview-news-row,
 .tradingview-financials-row,
 .tradingview-detail-stack,
 .tradingview-widget-shell {
@@ -953,6 +954,10 @@ button:disabled {
 }
 
 .tradingview-financials {
+  height: 582px;
+}
+
+.tradingview-news-timeline {
   height: 582px;
 }
 

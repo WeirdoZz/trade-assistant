@@ -49,4 +49,23 @@ test("TradingView helpers build symbol-specific widget configs", () => {
     buildTradingViewWidgetConfig("financials", "NYSE:BRK.B", "light").symbol,
     "NYSE:BRK.B"
   );
+  assert.deepEqual(buildTradingViewWidgetConfig("timeline", "nvda", "light"), {
+    displayMode: "adaptive",
+    feedMode: "symbol",
+    symbol: "NASDAQ:NVDA",
+    colorTheme: "light",
+    isTransparent: false,
+    locale: "zh_CN",
+    width: "100%",
+    height: 550
+  });
+});
+
+test("TradingView helpers resolve the timeline widget script", () => {
+  const { getTradingViewScriptSource } = loadTradingViewModule();
+
+  assert.equal(
+    getTradingViewScriptSource("timeline"),
+    "https://s3.tradingview.com/external-embedding/embed-widget-timeline.js"
+  );
 });

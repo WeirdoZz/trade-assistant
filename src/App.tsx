@@ -1116,6 +1116,16 @@ function App() {
                   />
                 </section>
 
+                <section className="tradingview-news-row">
+                  <TradingViewWidget
+                    kind="timeline"
+                    symbol={symbol}
+                    theme={theme}
+                    className="tradingview-news-timeline"
+                    loadStrategy="visible"
+                  />
+                </section>
+
                 <section className="tradingview-financials-row">
                   <TradingViewWidget
                     kind="financials"
@@ -1439,7 +1449,7 @@ function TradingViewWidget({
     : "Track all markets on TradingView";
   const href = getTradingViewSymbolUrl(
     symbol,
-    kind === "financials" ? "financials-overview/" : ""
+    kind === "financials" ? "financials-overview/" : kind === "timeline" ? "news/" : ""
   );
 
   return (

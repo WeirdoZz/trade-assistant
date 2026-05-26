@@ -2,7 +2,8 @@ export type TradingViewWidgetKind =
   | "symbol-info"
   | "symbol-profile"
   | "advanced-chart"
-  | "financials";
+  | "financials"
+  | "timeline";
 
 export type TradingViewTheme = "light" | "dark";
 
@@ -21,7 +22,8 @@ export function getTradingViewScriptSource(kind: TradingViewWidgetKind) {
     "symbol-info": "symbol-info",
     "symbol-profile": "symbol-profile",
     "advanced-chart": "advanced-chart",
-    financials: "financials"
+    financials: "financials",
+    timeline: "timeline"
   };
 
   return `https://s3.tradingview.com/external-embedding/embed-widget-${widgetNameByKind[kind]}.js`;
@@ -70,6 +72,19 @@ export function buildTradingViewWidgetConfig(
       symbol: tvSymbol,
       colorTheme: theme,
       displayMode: "adaptive",
+      isTransparent: false,
+      locale: "zh_CN",
+      width: "100%",
+      height: 550
+    };
+  }
+
+  if (kind === "timeline") {
+    return {
+      displayMode: "adaptive",
+      feedMode: "symbol",
+      symbol: tvSymbol,
+      colorTheme: theme,
       isTransparent: false,
       locale: "zh_CN",
       width: "100%",
